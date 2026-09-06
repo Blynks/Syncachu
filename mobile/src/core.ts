@@ -17,6 +17,26 @@ export type MediaItem = {
   id: string; name: string; contentType: string; size: number;
   createdAt: string; url: string; thumbnailUrl?: string;
 };
+export type StorageUsage = { limitBytes: number; usedBytes: number; reservedBytes: number; availableBytes: number };
+export function parseStorageUsage(value: unknown): StorageUsage {
+  if (!value || typeof value !== 'object') throw new Error('Invalid storage usage response.');
+  const row = value as Record<string, unknown>;
+  const number = (key: string): number => {
+    const bytes = row[key];
+    if (typeof bytes !== 'number' || !Number.isSafeInteger(bytes) || bytes < 0) throw new Error('Invalid storage usage response.');
+    return bytes;
+  };
+  const usage = { limitBytes: number('limitBytes'), usedBytes: number('usedBytes'), reservedBytes: number('reservedBytes'), availableBytes: number('availableBytes') };
+  if (!usage.limitBytes || usage.availableBytes !== Math.max(0, usage.limitBytes - usage.usedBytes - usage.reservedBytes)) {
+    throw new Error('Invalid storage usage response.');
+  }
+  return usage;
+}
+export function formatStorageBytes(bytes: number): string {
+  const unit = bytes >= 1e12 ? 'TB' : bytes >= 1e9 ? 'GB' : bytes >= 1e6 ? 'MB' : bytes >= 1e3 ? 'KB' : 'B';
+  const divisor = { TB: 1e12, GB: 1e9, MB: 1e6, KB: 1e3, B: 1 }[unit];
+  return `${(bytes / divisor).toLocaleString(undefined, { maximumFractionDigits: 2 })} ${unit}`;
+}
 export type UploadTicket = {
   duplicate: false; uploadId: string; uploadUrl: string;
   thumbnailUploadUrl?: string; expiresAt: string; blockSize: number;

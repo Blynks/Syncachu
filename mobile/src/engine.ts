@@ -4,8 +4,8 @@ import * as Network from 'expo-network';
 import * as MediaLibrary from 'expo-media-library';
 import * as ImagePicker from 'expo-image-picker';
 import { File } from 'expo-file-system';
-import { Api } from './api';
-import { canUpload, checkCancelled, MediaItem, mergeQueue, Policy, QueueItem, shouldSkipSelection } from './core';
+import { Api, ApiError } from './api';
+import { canUpload, checkCancelled, MediaItem, mergeQueue, parseStorageUsage, Policy, QueueItem, shouldSkipSelection, StorageUsage } from './core';
 import { contentType, removeOwnedFile, userDirectory } from './device';
 import { upload } from './upload';
 import { encodeQueue, QueueStorage } from './queueStorage';
@@ -14,6 +14,7 @@ type Snapshot = {
   ready: boolean; queue: QueueItem[]; allowMobile: boolean; auto: boolean;
   online: boolean; active: boolean; scanning: boolean; message: string;
   gallery: MediaItem[]; cursor?: string; galleryBusy: boolean;
+  usage?: StorageUsage; usageBusy: boolean; usageError: string;
 };
 
 export class SyncEngine {
@@ -25,6 +26,8 @@ export class SyncEngine {
   private subscriptions: { remove(): void }[] = [];
   private writeChain: Promise<void> = Promise.resolve();
   private running = false;
+  private quotaBlocked?: string;
+  private wakeRequested = false;
   private rescan = false;
   private job?: { key: string; controller: AbortController };
   private policy: Policy = { active: AppState.currentState === 'active', connected: false, reachable: false, wifi: false, allowMobile: false };
@@ -32,6 +35,7 @@ export class SyncEngine {
     ready: false, queue: [], allowMobile: false, auto: false, online: false,
     active: AppState.currentState === 'active', scanning: false, message: '',
     gallery: [], galleryBusy: false,
+    usageBusy: false, usageError: '',
   };
   constructor(readonly userId: string) {
     this.api = new Api(userId, this.session.signal);
@@ -83,6 +87,7 @@ export class SyncEngine {
         MediaLibrary.addListener(() => { void this.scanIfAuto(); }),
       );
       this.network(await Network.getNetworkStateAsync());
+      await Promise.all([this.loadGallery(), this.loadUsage()]);
       await this.scanIfAuto();
     } catch (error) { this.error(error); }
   }
@@ -211,21 +216,25 @@ export class SyncEngine {
     finally { if (!accepted) created.forEach(uri => removeOwnedFile(uri, this.directory)); }
   }
   async retry(key?: string) {
+    this.quotaBlocked = undefined;
     this.update({ queue: this.state.queue.map(item => item.status === 'error' && (!key || item.key === key)
       ? { ...item, status: 'queued', error: undefined } : item), message: '' });
     try { await this.persist(); void this.pump(); } catch (error) { this.error(error); }
   }
   async cancel(key: string) {
     const cancelled = this.state.queue.find(item => item.key === key);
+    if (this.quotaBlocked === key) this.quotaBlocked = undefined;
     this.update({ queue: this.state.queue.map(item => item.key === key ? { ...item, status: 'cancelled' } : item) });
     if (this.job?.key === key) this.job.controller.abort();
     try {
       await this.persist();
       removeOwnedFile(cancelled?.uri, this.directory);
+      void this.pump();
     } catch (error) { this.error(error); }
   }
   private async pump() {
-    if (this.running || !this.state.ready || this.session.signal.aborted || !canUpload(this.policy)) return;
+    if (this.running) { this.wakeRequested = true; return; }
+    if (this.quotaBlocked || !this.state.ready || this.session.signal.aborted || !canUpload(this.policy)) return;
     this.running = true;
     try {
       while (canUpload(this.policy) && !this.session.signal.aborted) {
@@ -253,17 +262,24 @@ export class SyncEngine {
         } catch (error) {
           if (this.session.signal.aborted) break;
           if (this.state.queue.includes(item)) {
+            const blockedByQuota = !controller.signal.aborted && error instanceof ApiError && error.status === 507;
+            if (blockedByQuota) this.quotaBlocked = item.key;
             item.status = controller.signal.aborted ? 'queued' : 'error';
             item.error = controller.signal.aborted ? undefined : error instanceof Error ? error.message : 'Upload failed. Retry to resume.';
-            this.update({ queue: [...this.state.queue] });
+            this.update({ queue: [...this.state.queue], ...(blockedByQuota ? { message: error.message } : {}) });
             try { await this.persist(); } catch (storageError) { this.error(storageError); break; }
+            if (blockedByQuota) break;
           }
         } finally {
           this.session.signal.removeEventListener('abort', abort);
           this.job = undefined;
+          await this.loadUsage();
         }
       }
-    } finally { this.running = false; }
+    } finally {
+      this.running = false;
+      if (this.wakeRequested) { this.wakeRequested = false; void this.pump(); }
+    }
   }
   async loadGallery(more = false) {
     if (this.state.galleryBusy || (more && !this.state.cursor)) return;
@@ -277,6 +293,17 @@ export class SyncEngine {
       this.update({ gallery, cursor: result.nextCursor });
     } catch (error) { this.error(error); }
     finally { this.update({ galleryBusy: false }); }
+  }
+  async loadUsage() {
+    if (this.state.usageBusy || this.session.signal.aborted) return;
+    this.update({ usageBusy: true, usageError: '' });
+    try {
+      const usage = parseStorageUsage(await this.api.request<unknown>('usage'));
+      checkCancelled(this.session.signal);
+      this.update({ usage });
+    } catch (error) {
+      this.update({ usage: undefined, usageError: error instanceof Error ? error.message : 'Storage usage unavailable. Try Refresh.' });
+    } finally { this.update({ usageBusy: false }); }
   }
   async destroy() {
     this.session.abort();

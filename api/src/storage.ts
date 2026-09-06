@@ -3,7 +3,7 @@ import {
   BlobServiceClient, BlobSASPermissions, SASProtocol, generateBlobSASQueryParameters,
   type ContainerClient, type UserDelegationKey,
 } from "@azure/storage-blob";
-import type { Config } from "./config.js";
+import type { StorageConfig } from "./config.js";
 import {
   ApiError, BLOCK_SIZE, SAS_LIFETIME_MS, type MediaItem, type Snapshot, type Storage,
   type StoredMedia, type Ticket, type UploadTicket,
@@ -28,7 +28,7 @@ export class AzureBlobStorage implements Storage {
   private delegationExpiry = 0;
 
   constructor(
-    config: Config,
+    config: StorageConfig,
     private readonly service = new BlobServiceClient(config.storageAccountUrl, new DefaultAzureCredential()),
     private readonly now: () => number = Date.now,
   ) {
@@ -96,6 +96,7 @@ export class AzureBlobStorage implements Storage {
     const data = Buffer.from(JSON.stringify(value));
     try {
       await this.container.getBlockBlobClient(name).uploadData(data, {
+        tier: "Hot",
         conditions: { ifNoneMatch: "*" },
         blobHTTPHeaders: { blobContentType: "application/json", blobCacheControl: "private, no-store" },
       });
@@ -157,6 +158,7 @@ export class AzureBlobStorage implements Storage {
     try {
       // Put Blob From URL is synchronous; an accepted background copy is never treated as complete.
       await this.container.getBlockBlobClient(name).syncUploadFromURL(source, {
+        tier: media ? "Cool" : "Hot",
         conditions: { ifNoneMatch: "*" },
         copySourceBlobProperties: false,
         blobHTTPHeaders: { blobContentType: contentType, blobCacheControl: "private, no-store" },
@@ -228,5 +230,27 @@ export class AzureBlobStorage implements Storage {
 
   async removeSnapshot(snapshot: Snapshot): Promise<void> {
     await this.container.getBlobClient(snapshot.blobName).withSnapshot(snapshot.snapshot).deleteIfExists();
+  }
+
+  async *quotaRecords(): AsyncIterable<{ owner: string; id: string; bytes: number }> {
+    for await (const blob of this.container.listBlobsFlat({ prefix: "users/" })) {
+      if (!blob.name.includes("/index/")) continue;
+      const match = /^users\/([a-f0-9]{64})\/index\/([a-f0-9]{64})\.json$/.exec(blob.name);
+      if (!match) throw new Error("Invalid catalog namespace during quota initialization");
+      const owner = match[1]!;
+      const id = match[2]!;
+      const media = await this.readJson<StoredMedia>(blob.name);
+      if (!media || media.id !== id || !Number.isSafeInteger(media.size) || media.size <= 0) throw new Error("Invalid catalog record");
+      const original = await this.container.getBlobClient(originalKey(owner, id)).getProperties();
+      if (original.contentLength !== media.size) throw new Error("Original size differs from catalog");
+      let bytes = media.size;
+      if (media.thumbnailKey) {
+        if (!media.thumbnailKey.startsWith(`${prefix(owner)}final/${id}/thumbnails/`)) throw new Error("Invalid thumbnail namespace");
+        const thumbnail = await this.container.getBlobClient(media.thumbnailKey).getProperties();
+        if (thumbnail.contentLength === undefined) throw new Error("Missing thumbnail size");
+        bytes += thumbnail.contentLength;
+      }
+      yield { owner, id, bytes };
+    }
   }
 }
