@@ -1,0 +1,39 @@
+{
+  "name": "mobile",
+  "version": "1.0.0",
+  "main": "index.ts",
+  "dependencies": {
+    "@noble/hashes": "2.4.0",
+    "@react-native-async-storage/async-storage": "2.2.0",
+    "@react-native-google-signin/google-signin": "16.1.5",
+    "expo": "~57.0.20",
+    "expo-dev-client": "~57.0.18",
+    "expo-file-system": "~57.0.6",
+    "expo-image-manipulator": "~57.0.16",
+    "expo-image-picker": "~57.0.16",
+    "expo-media-library": "~57.0.4",
+    "expo-network": "~57.0.1",
+    "expo-status-bar": "~57.0.1",
+    "expo-video-thumbnails": "~57.0.1",
+    "react": "19.2.3",
+    "react-native": "0.86.3"
+  },
+  "devDependencies": {
+    "@types/react": "~19.2.2",
+    "typescript": "~6.0.3"
+  },
+  "scripts": {
+    "start": "expo start --dev-client",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "typecheck": "tsc --noEmit",
+    "test": "tsc src/core.ts src/hash.ts src/upload.ts src/engine.ts --outDir .test-build --module commonjs --target ES2022 --strict --skipLibCheck --ignoreConfig && node --test tests/*.test.cjs",
+    "build": "expo export --platform android --platform ios"
+  },
+  "private": true,
+  "overrides": {
+    "xcode": {
+      "uuid": "11.1.1"
+    }
+  }
+}

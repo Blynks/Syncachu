@@ -1,0 +1,20 @@
+{
+  "rules": [
+    {
+      "enabled": true,
+      "name": "expire-staging-after-upload-window",
+      "type": "Lifecycle",
+      "definition": {
+        "filters": {
+          "blobTypes": ["blockBlob"],
+          "prefixMatch": ["media/staging/"]
+        },
+        "actions": {
+          "baseBlob": { "delete": { "daysAfterModificationGreaterThan": 2 } },
+          "snapshot": { "delete": { "daysAfterCreationGreaterThan": 2 } },
+          "version": { "delete": { "daysAfterCreationGreaterThan": 2 } }
+        }
+      }
+    }
+  ]
+}

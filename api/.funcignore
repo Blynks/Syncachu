@@ -1,0 +1,8 @@
+test/
+dist/test/
+.env
+.env.*
+local.settings.json
+local.settings.example.json
+*.md
+.git*
