@@ -19,7 +19,7 @@ function Action({ title, onPress, disabled = false, secondary = false }: {
 function Toggle({ label, detail, value, onChange }: { label: string; detail: string; value: boolean; onChange: (value: boolean) => void }) {
   return <View style={styles.toggle}>
     <View style={styles.flex}><Text style={styles.label}>{label}</Text><Text style={styles.muted}>{detail}</Text></View>
-    <Switch accessibilityLabel={label} value={value} onValueChange={onChange} trackColor={{ true: '#347567' }} />
+    <Switch accessibilityLabel={label} value={value} onValueChange={onChange} trackColor={{ true: '#4D6889' }} />
   </View>;
 }
 
@@ -91,7 +91,7 @@ function Library({ engine, email, onSignOut }: { engine: SyncEngine; email: stri
       </Text>}
       <Text style={styles.note}>Shared across approved accounts. Counts saved originals, thumbnails, and upload reservations, not your Azure bill.</Text>
     </View>
-    {!state.ready ? <ActivityIndicator accessibilityLabel="Loading saved queue" /> : <>
+    {!state.ready ? <ActivityIndicator accessibilityLabel="Loading saved queue" color="#405D80" /> : <>
       <View style={styles.actions}>
         <Action title="Choose files" onPress={() => { void engine.pick(); }} />
         <Action title={state.scanning ? 'Scanning library…' : 'Sync all'} secondary disabled={state.scanning}
@@ -188,7 +188,7 @@ export default function App() {
     <StatusBar style="dark" />
     {account ? <Library key={account.engine.userId} engine={account.engine} email={account.email} onSignOut={() => { void signOut(); }} />
       : <View style={styles.welcome}>
-        <View style={styles.mark}><Text style={styles.markText}>S</Text></View>
+        <View style={styles.mark}><Image accessibilityLabel="Syncachu logo" source={require('./assets/syncachu-logo.png')} style={styles.markImage} /></View>
         <Text style={styles.eyebrow}>MEMORIES, WITHOUT THE CLUTTER</Text>
         <Text accessibilityRole="header" style={styles.welcomeTitle}>Meet Syncachu.</Text>
         <Text style={styles.welcomeText}>Your photos. Your videos.{'\n'}Your own private cloud.</Text>
@@ -201,38 +201,38 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: '#F7F8F3', paddingTop: Platform.OS === 'android' ? 28 : 0 },
+  screen: { flex: 1, backgroundColor: '#F8F7F2', paddingTop: Platform.OS === 'android' ? 28 : 0 },
   list: { padding: 20, paddingBottom: 40 }, header: { gap: 16 }, flex: { flex: 1 },
   row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
-  eyebrow: { color: '#437365', fontSize: 10, letterSpacing: 1.5, fontWeight: '800' },
-  title: { fontSize: 33, color: '#1D3932', fontWeight: '800' },
-  hero: { backgroundColor: '#234B40', borderRadius: 24, padding: 24, gap: 14 },
+  eyebrow: { color: '#586F8B', fontSize: 10, letterSpacing: 1.5, fontWeight: '800' },
+  title: { fontSize: 33, color: '#26364D', fontWeight: '800' },
+  hero: { backgroundColor: '#2E435E', borderRadius: 24, padding: 24, gap: 14 },
   heroTitle: { color: '#FFFFFF', fontSize: 27, fontWeight: '700', lineHeight: 34 },
-  heroText: { color: '#DCE9DD', fontSize: 15, lineHeight: 23 },
-  badge: { backgroundColor: '#DBF09D', borderRadius: 20, paddingHorizontal: 12, paddingVertical: 8, alignSelf: 'flex-start' },
-  badgeText: { color: '#244236', fontSize: 12, fontWeight: '700' },
-  button: { minHeight: 46, justifyContent: 'center', alignItems: 'center', backgroundColor: '#2C6555', borderRadius: 13, paddingHorizontal: 18, paddingVertical: 12 },
+  heroText: { color: '#DEE5EF', fontSize: 15, lineHeight: 23 },
+  badge: { backgroundColor: '#F1DFA4', borderRadius: 20, paddingHorizontal: 12, paddingVertical: 8, alignSelf: 'flex-start' },
+  badgeText: { color: '#35445B', fontSize: 12, fontWeight: '700' },
+  button: { minHeight: 46, justifyContent: 'center', alignItems: 'center', backgroundColor: '#405D80', borderRadius: 13, paddingHorizontal: 18, paddingVertical: 12 },
   buttonText: { color: 'white', fontSize: 14, fontWeight: '700' },
-  secondary: { backgroundColor: '#E9EDE4' }, secondaryText: { color: '#264B40' }, dim: { opacity: 0.5 },
+  secondary: { backgroundColor: '#E9EDF2' }, secondaryText: { color: '#3B526F' }, dim: { opacity: 0.5 },
   actions: { flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
   panel: { backgroundColor: '#FFFFFF', borderRadius: 18, padding: 16, gap: 14 },
-  toggle: { flexDirection: 'row', alignItems: 'center', gap: 14 }, divider: { height: 1, backgroundColor: '#E9EDE4' },
-  label: { fontSize: 15, fontWeight: '600', color: '#243C35' },
-  muted: { color: '#5F7068', fontSize: 12, lineHeight: 19 },
-  note: { color: '#65746C', fontSize: 12, lineHeight: 19 },
-  notice: { color: '#2D5B47', backgroundColor: '#E8F0DC', padding: 12, borderRadius: 12, fontSize: 13, lineHeight: 20 },
-  heading: { color: '#243C35', fontWeight: '700', fontSize: 21 },
-  empty: { color: '#65746C', paddingVertical: 16, lineHeight: 22 },
+  toggle: { flexDirection: 'row', alignItems: 'center', gap: 14 }, divider: { height: 1, backgroundColor: '#E9EDF2' },
+  label: { fontSize: 15, fontWeight: '600', color: '#2E3E54' },
+  muted: { color: '#5C697A', fontSize: 12, lineHeight: 19 },
+  note: { color: '#667181', fontSize: 12, lineHeight: 19 },
+  notice: { color: '#4E5E74', backgroundColor: '#F3EEDB', padding: 12, borderRadius: 12, fontSize: 13, lineHeight: 20 },
+  heading: { color: '#2E3E54', fontWeight: '700', fontSize: 21 },
+  empty: { color: '#667181', paddingVertical: 16, lineHeight: 22 },
   queueItem: { backgroundColor: '#FFF', borderRadius: 14, padding: 14, gap: 10 },
-  progressTrack: { height: 5, backgroundColor: '#E7EDE3', borderRadius: 5, overflow: 'hidden' },
-  progressFill: { height: 5, backgroundColor: '#518571' },
-  error: { color: '#9B3530', fontSize: 13, lineHeight: 20 },
+  progressTrack: { height: 5, backgroundColor: '#E5EAF0', borderRadius: 5, overflow: 'hidden' },
+  progressFill: { height: 5, backgroundColor: '#607D9E' },
+  error: { color: '#A24F4A', fontSize: 13, lineHeight: 20 },
   galleryRow: { gap: 12 }, mediaCard: { flex: 1, maxWidth: '49%', marginBottom: 20, gap: 5 },
-  thumbnail: { width: '100%', aspectRatio: 1, borderRadius: 14 }, placeholder: { backgroundColor: '#E3E9DD', alignItems: 'center', justifyContent: 'center' },
-  mediaName: { fontSize: 13, color: '#263D34', fontWeight: '600' },
+  thumbnail: { width: '100%', aspectRatio: 1, borderRadius: 14 }, placeholder: { backgroundColor: '#E3E8EE', alignItems: 'center', justifyContent: 'center' },
+  mediaName: { fontSize: 13, color: '#304159', fontWeight: '600' },
   welcome: { flex: 1, justifyContent: 'center', padding: 32, gap: 23 },
-  welcomeTitle: { color: '#234B40', fontWeight: '800', fontSize: 43 },
-  welcomeText: { color: '#385B4E', fontSize: 23, lineHeight: 33 },
-  mark: { backgroundColor: '#DBF09D', width: 72, height: 72, borderRadius: 24, alignItems: 'center', justifyContent: 'center' },
-  markText: { fontSize: 43, color: '#234B40', fontWeight: '800' },
+  welcomeTitle: { color: '#2E435E', fontWeight: '800', fontSize: 43 },
+  welcomeText: { color: '#4D607A', fontSize: 23, lineHeight: 33 },
+  mark: { backgroundColor: '#F1DFA4', width: 72, height: 72, borderRadius: 24, alignItems: 'center', justifyContent: 'center' },
+  markImage: { width: 64, height: 64 },
 });
