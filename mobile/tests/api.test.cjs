@@ -1,6 +1,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const Module = require('node:module');
+const { join } = require('node:path');
 process.env.EXPO_PUBLIC_API_URL = 'https://api.example.com/api';
 let currentUser = 'user-a';
 let requests = [];
@@ -10,7 +11,7 @@ const success = token => ({ type: 'success', data: { user: { id: 'user-a' }, idT
 let silentSignIn = async () => success('test');
 const originalLoad = Module._load;
 Module._load = function (request, parent, isMain) {
-  if (parent?.filename.endsWith('/.test-build/api.js')) {
+  if (parent?.filename.endsWith(join('.test-build', 'api.js'))) {
     if (request === '@react-native-google-signin/google-signin') return { GoogleSignin: {
       getCurrentUser: () => ({ user: { id: currentUser } }),
       getTokens: async () => { cachedTokenCalls++; return { idToken: 'expired-cached-token' }; },

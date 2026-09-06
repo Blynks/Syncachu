@@ -6,10 +6,11 @@ import { ApiError } from "../src/types.js";
 
 const keys = await generateKeyPair("RS256");
 const jwk = await exportJWK(keys.publicKey);
-const authenticate = createAuthenticator(["client-one", "client-two"], createLocalJWKSet({ keys: [{ ...jwk, kid: "google-test", alg: "RS256" }] }));
+const authenticate = createAuthenticator(["client-one", "client-two"], ["owner@example.com"], createLocalJWKSet({ keys: [{ ...jwk, kid: "google-test", alg: "RS256" }] }));
 const valid: JWTPayload = {
   sub: "google-subject", iss: "https://accounts.google.com", aud: "client-one",
   exp: Math.floor(Date.now() / 1000) + 3600,
+  email: "owner@example.com", email_verified: true,
 };
 const header = (token: string) => ["Bearer", token].join(" ");
 async function token(payload: JWTPayload) {
@@ -28,7 +29,7 @@ test("native hybrid tokens may have a different trusted azp and a single Web-cli
   const withoutPresenter = await authenticate(header(await token(valid)));
   const hybrid = await authenticate(header(await token({ ...valid, aud: "client-one", azp: "client-two" })));
   assert.equal(hybrid, withoutPresenter);
-  const webAudienceOnly = createAuthenticator(["client-one"], createLocalJWKSet({
+  const webAudienceOnly = createAuthenticator(["client-one"], ["owner@example.com"], createLocalJWKSet({
     keys: [{ ...jwk, kid: "google-test", alg: "RS256" }],
   }));
   await assert.rejects(webAudienceOnly(header(await token({ ...valid, aud: "client-one", azp: "client-two" }))), unauthorized);
@@ -60,6 +61,19 @@ test("missing, malformed, oversized, wrong-signature and wrong-algorithm tokens 
   await assert.rejects(authenticate(header(wrong)), unauthorized);
   const hmac = await new SignJWT(valid).setProtectedHeader({ alg: "HS256" }).sign(Buffer.alloc(32, 1));
   await assert.rejects(authenticate(header(hmac)), unauthorized);
-  assert.throws(() => createAuthenticator([]));
-  assert.throws(() => createAuthenticator(["*"]));
+  assert.throws(() => createAuthenticator([], ["owner@example.com"]));
+  assert.throws(() => createAuthenticator(["*"], ["owner@example.com"]));
+});
+
+test("private beta allows only explicitly approved verified emails", async () => {
+  assert.ok(await authenticate(header(await token({ ...valid, email: "OWNER@EXAMPLE.COM" }))));
+  for (const patch of [
+    { email: "stranger@example.com" }, { email: undefined }, { email_verified: false }, { email_verified: "true" },
+  ]) {
+    await assert.rejects(authenticate(header(await token({ ...valid, ...patch }))),
+      (error: unknown) => error instanceof ApiError && error.status === 403);
+  }
+  assert.throws(() => createAuthenticator(["client-one"], []));
+  assert.throws(() => createAuthenticator(["client-one"], ["*@example.com"]));
+  assert.throws(() => createAuthenticator(["client-one"], [""]));
 });

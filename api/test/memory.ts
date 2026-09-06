@@ -1,9 +1,16 @@
 import { randomUUID } from "node:crypto";
+import { MediaService } from "../src/service.js";
+import { DEFAULT_QUOTA_BYTES, QuotaLedger } from "../src/quota.js";
+import { MemoryQuotaStore } from "./quotaMemory.js";
 import {
   ApiError, BLOCK_SIZE, type MediaItem, type Snapshot, type Storage, type StoredMedia, type Ticket, type UploadTicket,
 } from "../src/types.js";
 
 export class MemoryStorage implements Storage {
+  quotaStore = new MemoryQuotaStore();
+  service(now = Date.now, limit = DEFAULT_QUOTA_BYTES) {
+    return new MediaService(this, new QuotaLedger(this.quotaStore, limit, now), now);
+  }
   tickets = new Map<string, Ticket>();
   media = new Map<string, StoredMedia>();
   staging = new Map<string, Buffer>();

@@ -1,6 +1,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const Module = require('node:module');
+const { join } = require('node:path');
 const { BLOCK_SIZE, blockId } = require('../.test-build/core.js');
 
 const host = 'mystorage.blob.core.windows.net';
@@ -10,7 +11,7 @@ let preview;
 class ApiError extends Error { constructor(status) { super(); this.status = status; } }
 const originalLoad = Module._load;
 Module._load = function (request, parent, isMain) {
-  if (parent?.filename.endsWith('/.test-build/upload.js')) {
+  if (parent?.filename.endsWith(join('.test-build', 'upload.js'))) {
     if (request === 'expo/fetch') return { fetch: (...args) => global.fetch(...args) };
     if (request === 'expo-file-system') return { FileMode: { ReadOnly: 'r' } };
     if (request === './api') return { ApiError, BLOB_HOST: host };

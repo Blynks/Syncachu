@@ -11,6 +11,7 @@
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
+    "quota:init": "npm run build && node dist/src/initializeQuota.js",
     "test": "npm run build && node --test dist/test/*.test.js",
     "start": "npm run build && func start"
   },
@@ -18,6 +19,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@azure/data-tables": "13.3.2",
     "@azure/functions": "4.16.2",
     "@azure/identity": "4.13.2",
     "@azure/storage-blob": "12.33.0",

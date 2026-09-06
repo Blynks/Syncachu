@@ -40,6 +40,7 @@ export interface StoredMedia {
   size: number;
   createdAt: string;
   thumbnailKey?: string;
+  thumbnailSize?: number;
 }
 
 export interface MediaItem {

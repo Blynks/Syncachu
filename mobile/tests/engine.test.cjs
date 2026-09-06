@@ -1,6 +1,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const Module = require('node:module');
+const { join } = require('node:path');
 const stored = new Map();
 const storage = {
   getItem: async key => stored.get(key) ?? null,
@@ -11,11 +12,14 @@ const storage = {
 const removed = [];
 let runUpload;
 let permissionRequests = 0;
+let readApi = async path => path === 'usage'
+  ? { limitBytes: 1e12, usedBytes: 0, reservedBytes: 0, availableBytes: 1e12 } : { items: [] };
+class ApiError extends Error { constructor(status, message) { super(message); this.status = status; } }
 const AppState = { currentState: 'active', addEventListener: () => ({ remove() {} }) };
 const network = { isConnected: true, isInternetReachable: true, type: 'WIFI' };
 const originalLoad = Module._load;
 Module._load = function (request, parent, isMain) {
-  if (parent?.filename.endsWith('/.test-build/engine.js')) {
+  if (parent?.filename.endsWith(join('.test-build', 'engine.js'))) {
     if (request === '@react-native-async-storage/async-storage') return { __esModule: true, default: storage };
     if (request === 'react-native') return { AppState };
     if (request === 'expo-network') return {
@@ -27,7 +31,11 @@ Module._load = function (request, parent, isMain) {
       requestPermissionsAsync: async () => { permissionRequests++; return { granted: false }; },
     };
     if (request === 'expo-image-picker' || request === 'expo-file-system') return {};
-    if (request === './api') return { Api: class { constructor(userId) { this.userId = userId; } async drain() {} } };
+    if (request === './api') return { ApiError, Api: class {
+      constructor(userId) { this.userId = userId; }
+      async drain() {}
+      request(path) { return readApi(path); }
+    } };
     if (request === './device') return {
       userDirectory: userId => ({ uri: `file:///owned/${userId}/` }),
       removeOwnedFile: uri => removed.push(uri),
@@ -116,4 +124,109 @@ test('an expired account cannot request auto-sync permissions', async () => {
   const before = permissionRequests;
   await engine.setAuto(true);
   assert.equal(permissionRequests, before);
+});
+
+test('initialization loads existing cloud gallery and shared storage usage', async () => {
+  stored.clear();
+  const previous = readApi;
+  const usage = { limitBytes: 1e12, usedBytes: 100, reservedBytes: 50, availableBytes: 1e12 - 150 };
+  readApi = async path => path === 'usage' ? usage : { items: [{ id: 'existing-backup' }] };
+  const engine = new SyncEngine('usage-user');
+  try {
+    await engine.initialize();
+    assert.deepEqual(engine.snapshot().usage, usage);
+    assert.equal(engine.snapshot().gallery[0].id, 'existing-backup');
+  } finally { await engine.destroy(); readApi = previous; }
+});
+
+test('quota rejection pauses remaining work until explicit retry', async () => {
+  stored.clear();
+  seed('quota-user');
+  const saved = JSON.parse(stored.get('syncachu.v1.quota-user'));
+  saved.queue.push({ ...saved.queue[0], key: 'asset:2' });
+  stored.set('syncachu.v1.quota-user', JSON.stringify(saved));
+  let attempts = 0;
+  runUpload = async () => { attempts++; throw new ApiError(507, 'Instance storage quota reached'); };
+  const engine = new SyncEngine('quota-user');
+  try {
+    await engine.initialize();
+    await until(() => engine.snapshot().message.includes('quota reached'));
+    assert.equal(attempts, 1);
+    assert.equal(engine.snapshot().queue[1].status, 'queued');
+    await until(() => !engine.running);
+    runUpload = async item => { attempts++; return { id: item.key }; };
+    await engine.retry();
+    await until(() => engine.snapshot().queue.every(item => item.status === 'done'));
+    assert.equal(attempts, 3);
+  } finally { await engine.destroy(); }
+});
+
+test('usage failure is visible and sign-out discards delayed usage responses', async () => {
+  stored.clear();
+  const previous = readApi;
+  readApi = async () => { throw new ApiError(403, 'Account not approved'); };
+  const engine = new SyncEngine('usage-error');
+  try {
+    await engine.loadUsage();
+    assert.equal(engine.snapshot().usage, undefined);
+    assert.equal(engine.snapshot().usageError, 'Account not approved');
+    let resolve;
+    readApi = () => new Promise(done => { resolve = done; });
+    const pending = engine.loadUsage();
+    await engine.destroy();
+    resolve({ limitBytes: 1e12, usedBytes: 0, reservedBytes: 0, availableBytes: 1e12 });
+    await pending;
+    assert.equal(engine.snapshot().usage, undefined);
+  } finally { await engine.destroy(); readApi = previous; }
+});
+
+test('cancelling a quota-failed item allows remaining smaller uploads to proceed', async () => {
+  stored.clear();
+  seed('quota-cancel');
+  const saved = JSON.parse(stored.get('syncachu.v1.quota-cancel'));
+  saved.queue.push({ ...saved.queue[0], key: 'asset:2' });
+  stored.set('syncachu.v1.quota-cancel', JSON.stringify(saved));
+  let attempts = 0;
+  runUpload = async item => {
+    attempts++;
+    if (item.key === 'asset:1') throw new ApiError(507, 'Instance storage quota reached');
+    return { id: item.key };
+  };
+  const engine = new SyncEngine('quota-cancel');
+  try {
+    await engine.initialize();
+    await until(() => engine.snapshot().message.includes('quota reached'));
+    await engine.cancel('asset:1');
+    await until(() => engine.snapshot().queue[1].status === 'done');
+    assert.equal(engine.snapshot().queue[0].status, 'cancelled');
+    assert.equal(attempts, 2);
+  } finally { await engine.destroy(); }
+});
+
+test('retry requested during a delayed post-error usage refresh is not lost', async () => {
+  stored.clear();
+  seed('quota-race');
+  const previous = readApi;
+  let failed = false;
+  let resolveUsage;
+  let attempts = 0;
+  readApi = path => path === 'usage' && failed
+    ? new Promise(resolve => { resolveUsage = resolve; }) : previous(path);
+  runUpload = async item => {
+    attempts++;
+    if (!failed) { failed = true; throw new ApiError(507, 'Instance storage quota reached'); }
+    return { id: item.key };
+  };
+  const engine = new SyncEngine('quota-race');
+  try {
+    await engine.initialize();
+    await until(() => !!resolveUsage);
+    await engine.retry();
+    assert.equal(engine.snapshot().queue[0].status, 'queued');
+    assert.equal(attempts, 1);
+    readApi = previous;
+    resolveUsage(await previous('usage'));
+    await until(() => engine.snapshot().queue[0].status === 'done');
+    assert.equal(attempts, 2);
+  } finally { await engine.destroy(); readApi = previous; }
 });
