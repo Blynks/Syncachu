@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 256 256" fill="none">
+  <title>Syncachu</title>
+  <desc>An original slim, side-facing mascot with one upright ear, one swept-back ear, an angular tail, and a fine sync loop at its visual centre.</desc>
+  <defs>
+    <mask id="sync-cutout" maskUnits="userSpaceOnUse" x="0" y="0" width="256" height="256">
+      <rect width="256" height="256" fill="white"/>
+      <g stroke="black" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M88 156a20 20 0 0 1 38.75-7.5m0-8v8h-8"/>
+        <path d="M128 156a20 20 0 0 1-38.75 7.5m0 8v-8h8"/>
+      </g>
+    </mask>
+  </defs>
+  <path fill="#2E435E" mask="url(#sync-cutout)" d="m160 178 23-13 1-20 41-40 10 28-24 29-15 1-21 24-5 15ZM70 86C64 65 65 42 76 22q4-3 4 3c3 20 2 37-1 51 17-3 32-1 42 5 21-19 45-28 72-27q6 0 1 6c-19 22-40 31-55 36 7 16 10 32 15 47 11 16 17 36 12 53q-4 14-14 20l1 13q-3 6-8 0l-7-10c-12 3-21-2-29-4l-9 5-4 12q-4 4-8-3l-3-13c-16-3-23-16-24-31l-3-19-28-5q-5-1-2-7l28-9q6-2 10-1c-17-8-24-21-21-33 2-11 11-21 25-25Z"/>
+</svg>
