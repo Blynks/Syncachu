@@ -1,0 +1,11 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "FUNCTIONS_WORKER_RUNTIME": "node",
+    "FUNCTIONS_NODE_BLOCK_ON_ENTRY_POINT_ERROR": "true",
+    "GOOGLE_CLIENT_IDS": "YOUR_WEB_CLIENT_ID.apps.googleusercontent.com,YOUR_ANDROID_CLIENT_ID.apps.googleusercontent.com,YOUR_IOS_CLIENT_ID.apps.googleusercontent.com",
+    "AZURE_STORAGE_ACCOUNT_URL": "https://replacewithmediaaccount.blob.core.windows.net",
+    "AZURE_STORAGE_CONTAINER": "media",
+    "AzureWebJobsStorage__accountName": "replacewithhostaccount"
+  }
+}
