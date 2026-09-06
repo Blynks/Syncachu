@@ -58,6 +58,29 @@ test('queue generations and cleanup remain isolated between accounts', async () 
   await first.write(encodeQueue(snapshot(1)));
   assert.deepEqual(await second.read(), snapshot(7));
 });
+test('quota failure reclaims orphan chunks before retry while preserving published and other-account data', async () => {
+  const storage = createStorage();
+  const store = new QueueStorage(storage, 'user-a');
+  const other = new QueueStorage(storage, 'user-b');
+  const original = snapshot(1);
+  await store.write(encodeQueue(original));
+  await other.write(encodeQueue(snapshot(2)));
+  const totalBytes = () => [...storage.rows.values()].reduce((sum, value) => sum + Buffer.byteLength(value), 0);
+  const quota = totalBytes() + QUEUE_CHUNK_BYTES + 256;
+  const write = storage.setItem;
+  storage.setItem = async (key, value) => {
+    const nextSize = totalBytes() - Buffer.byteLength(storage.rows.get(key) ?? '') + Buffer.byteLength(value);
+    if (nextSize > quota) throw new Error('Storage quota exceeded');
+    await write(key, value);
+  };
+  await assert.rejects(store.write(encodeQueue(snapshot(1000))), /quota exceeded/);
+  assert.deepEqual(await store.read(), original);
+  assert.ok(totalBytes() + Buffer.byteLength(encodeQueue(snapshot(50)).chunks[0]) > quota);
+  await store.write(encodeQueue(snapshot(50)));
+  assert.deepEqual(await store.read(), snapshot(50));
+  assert.deepEqual(await other.read(), snapshot(2));
+  assert.equal(storage.rows.size, 4);
+});
 test('legacy queue migrates only after new manifest publication', async () => {
   const storage = createStorage();
   const queue = snapshot(1);

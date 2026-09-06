@@ -77,4 +77,5 @@ test('private SAS gallery previews never receive Google authorization', () => {
   assert.match(component, /trustedBlobUrl\(item\.thumbnailUrl!, BLOB_HOST\)/);
   assert.doesNotMatch(component, /Authorization|api\.token|GoogleSignin/);
   assert.match(component, /credentials: 'omit'/);
+  assert.match(component, /redirect: 'error'/);
 });

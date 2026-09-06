@@ -27,7 +27,7 @@ Module._load = function (request, parent, isMain) {
       requestPermissionsAsync: async () => { permissionRequests++; return { granted: false }; },
     };
     if (request === 'expo-image-picker' || request === 'expo-file-system') return {};
-    if (request === './api') return { Api: class { constructor(userId) { this.userId = userId; } } };
+    if (request === './api') return { Api: class { constructor(userId) { this.userId = userId; } async drain() {} } };
     if (request === './device') return {
       userDirectory: userId => ({ uri: `file:///owned/${userId}/` }),
       removeOwnedFile: uri => removed.push(uri),

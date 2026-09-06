@@ -283,6 +283,6 @@ export class SyncEngine {
     this.job?.controller.abort();
     this.subscriptions.forEach(subscription => subscription.remove());
     this.listeners.clear();
-    await this.writeChain.catch(() => {});
+    await Promise.all([this.writeChain.catch(() => {}), this.api.drain()]);
   }
 }

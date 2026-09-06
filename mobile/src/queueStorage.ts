@@ -50,6 +50,15 @@ export class QueueStorage {
   private chunkKey(generation: string, index: number) {
     return `${this.chunkPrefix}${generation}.${index}`;
   }
+  private async cleanup(generation?: string, removeLegacy = false): Promise<void> {
+    const activePrefix = generation ? `${this.chunkPrefix}${generation}.` : undefined;
+    const obsolete = (await this.storage.getAllKeys()).filter(key =>
+      (removeLegacy && key === this.key)
+      || (key.startsWith(this.chunkPrefix) && (!activePrefix || !key.startsWith(activePrefix))));
+    for (let offset = 0; offset < obsolete.length; offset += 100) {
+      await this.storage.multiRemove(obsolete.slice(offset, offset + 100));
+    }
+  }
   async read(): Promise<QueueSnapshot | null> {
     const raw = await this.storage.getItem(this.manifestKey);
     if (!raw) {
@@ -69,6 +78,8 @@ export class QueueStorage {
   }
   // The engine serializes writes. Publish one small manifest only after every chunk is durable.
   async write(encoded: EncodedQueue): Promise<void> {
+    const published = await this.storage.getItem(this.manifestKey);
+    await this.cleanup(published ? this.parseManifest(published).generation : undefined);
     const generation = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
     for (let index = 0; index < encoded.chunks.length; index++) {
       await this.storage.setItem(this.chunkKey(generation, index), encoded.chunks[index]);
@@ -78,14 +89,9 @@ export class QueueStorage {
       auto: encoded.auto, allowMobile: encoded.allowMobile,
     };
     await this.storage.setItem(this.manifestKey, JSON.stringify(manifest));
-    // Cleanup is optional: interrupted writes leave the previous manifest fully readable.
+    // Post-publication cleanup is optional; the next write reclaims interrupted generations first.
     try {
-      const activePrefix = `${this.chunkPrefix}${generation}.`;
-      const obsolete = (await this.storage.getAllKeys()).filter(key =>
-        key === this.key || (key.startsWith(this.chunkPrefix) && !key.startsWith(activePrefix)));
-      for (let offset = 0; offset < obsolete.length; offset += 100) {
-        await this.storage.multiRemove(obsolete.slice(offset, offset + 100));
-      }
+      await this.cleanup(generation, true);
     } catch {}
   }
 }

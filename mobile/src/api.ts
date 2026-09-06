@@ -24,18 +24,40 @@ export class ApiError extends Error {
 }
 
 export class Api {
+  private refresh?: Promise<string>;
   constructor(private userId: string, private sessionSignal: AbortSignal) {}
 
+  private checkAccount(signal = this.sessionSignal): void {
+    checkCancelled(signal);
+    checkCancelled(this.sessionSignal);
+    if (GoogleSignin.getCurrentUser()?.user.id !== this.userId) throw new Error('Account changed. Sign in again.');
+  }
+
+  private async refreshToken(): Promise<string> {
+    this.checkAccount();
+    const result = await GoogleSignin.signInSilently();
+    this.checkAccount();
+    if (result.type !== 'success' || result.data.user.id !== this.userId || !result.data.idToken) {
+      throw new Error('Google session expired. Sign out and sign in again.');
+    }
+    return result.data.idToken;
+  }
+
   async token(signal = this.sessionSignal): Promise<string> {
-    checkCancelled(signal);
-    checkCancelled(this.sessionSignal);
-    if (GoogleSignin.getCurrentUser()?.user.id !== this.userId) throw new Error('Account changed. Sign in again.');
-    const { idToken } = await GoogleSignin.getTokens();
-    checkCancelled(signal);
-    checkCancelled(this.sessionSignal);
-    if (GoogleSignin.getCurrentUser()?.user.id !== this.userId) throw new Error('Account changed. Sign in again.');
-    if (!idToken) throw new Error('Google did not return an ID token. Check the web client ID.');
+    this.checkAccount(signal);
+    if (!this.refresh) {
+      const pending = this.refreshToken();
+      this.refresh = pending;
+      const clear = () => { if (this.refresh === pending) this.refresh = undefined; };
+      void pending.then(clear, clear);
+    }
+    const idToken = await this.refresh;
+    this.checkAccount(signal);
     return idToken;
+  }
+
+  async drain(): Promise<void> {
+    await this.refresh?.catch(() => {});
   }
 
   async request<T>(path: string, body?: object, signal = this.sessionSignal): Promise<T> {
