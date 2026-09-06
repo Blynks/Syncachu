@@ -230,3 +230,31 @@ test('retry requested during a delayed post-error usage refresh is not lost', as
     assert.equal(attempts, 2);
   } finally { await engine.destroy(); readApi = previous; }
 });
+
+test('retry during error persistence cannot reinstate the quota pause', async () => {
+  stored.clear();
+  seed('quota-persist-race');
+  const previousWrite = storage.setItem;
+  let releaseWrite;
+  let attempts = 0;
+  storage.setItem = async (key, value) => {
+    if (!releaseWrite && value.includes('"status":"error"')) {
+      await new Promise(resolve => { releaseWrite = resolve; });
+    }
+    await previousWrite(key, value);
+  };
+  runUpload = async item => {
+    if (++attempts === 1) throw new ApiError(507, 'Instance storage quota reached');
+    return { id: item.key };
+  };
+  const engine = new SyncEngine('quota-persist-race');
+  try {
+    await engine.initialize();
+    await until(() => !!releaseWrite);
+    const retry = engine.retry();
+    releaseWrite();
+    await retry;
+    await until(() => engine.snapshot().queue[0].status === 'done');
+    assert.equal(attempts, 2);
+  } finally { releaseWrite?.(); await engine.destroy(); storage.setItem = previousWrite; }
+});

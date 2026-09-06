@@ -18,7 +18,7 @@ designing the corresponding VNet, DNS, runner, and mobile connectivity.
 | Resource | Default |
 | --- | --- |
 | Functions plan | Linux Flex `FC1`; Node `22`; zero always-ready instances; 2,048 MB; HTTP concurrency 4 per instance |
-| Scale ceiling | 40 instances, the Flex minimum configurable maximum; not 40 running/reserved instances |
+| Scale ceiling | 40 instances, this template's minimum/default ceiling; regional platform limits may differ. Not 40 running/reserved instances |
 | Host/deployment storage | Dedicated `StorageV2`, Hot, `Standard_LRS`; not the media account |
 | Media storage | Separate `StorageV2`, Hot, `Standard_ZRS`; private `media` container and `syncachuquota` table in the same account |
 | Media recovery | Blob and container soft deletion for 7 days; versioning disabled |

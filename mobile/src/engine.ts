@@ -262,15 +262,13 @@ export class SyncEngine {
         } catch (error) {
           if (this.session.signal.aborted) break;
           if (this.state.queue.includes(item)) {
+            const blockedByQuota = !controller.signal.aborted && error instanceof ApiError && error.status === 507;
+            if (blockedByQuota) this.quotaBlocked = item.key;
             item.status = controller.signal.aborted ? 'queued' : 'error';
             item.error = controller.signal.aborted ? undefined : error instanceof Error ? error.message : 'Upload failed. Retry to resume.';
-            this.update({ queue: [...this.state.queue] });
+            this.update({ queue: [...this.state.queue], ...(blockedByQuota ? { message: error.message } : {}) });
             try { await this.persist(); } catch (storageError) { this.error(storageError); break; }
-            if (!controller.signal.aborted && error instanceof ApiError && error.status === 507) {
-              this.quotaBlocked = item.key;
-              this.error(error);
-              break;
-            }
+            if (blockedByQuota) break;
           }
         } finally {
           this.session.signal.removeEventListener('abort', abort);

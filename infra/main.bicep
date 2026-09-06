@@ -40,7 +40,7 @@ param quotaTableName string = 'syncachuquota'
 @minLength(1)
 param storageQuotaBytes string = '1000000000000'
 
-@description('Flex scale-out ceiling. 40 is the platform minimum, not a reserved or always-running instance count.')
+@description('Flex scale-out ceiling. This template uses a minimum/default ceiling of 40, not a reserved or always-running instance count; regional platform limits may differ.')
 @minValue(40)
 @maxValue(1000)
 param maximumInstanceCount int = 40
