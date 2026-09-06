@@ -1,0 +1,117 @@
+name: Deploy private beta API
+
+on:
+  workflow_dispatch:
+    inputs:
+      quota_ready:
+        description: 'Quota initialized per infra/README.md; no unaccounted legacy writers remain'
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: syncachu-azure-dev
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Require quota readiness confirmation
+        env:
+          QUOTA_READY: ${{ inputs.quota_ready }}
+        run: |
+          if [ "$QUOTA_READY" != "true" ]; then
+            echo "::error::Initialize the quota ledger and stop legacy writers as documented in infra/README.md."
+            exit 1
+          fi
+
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: api/package-lock.json
+
+      - name: Restore, typecheck, test, and build
+        working-directory: api
+        run: |
+          npm ci
+          npm run typecheck
+          npm test
+          npm run build
+
+      - name: Assemble production-only artifact
+        working-directory: api
+        run: |
+          mkdir -p ../api-artifact/dist
+          cp host.json package.json package-lock.json ../api-artifact/
+          cp -R dist/src ../api-artifact/dist/
+          npm ci --omit=dev --prefix ../api-artifact
+          test -f ../api-artifact/dist/src/functions.js
+          test -f ../api-artifact/host.json
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: api-${{ github.sha }}
+          path: api-artifact
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 3
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: azure-dev
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: api-${{ github.sha }}
+          path: api-artifact
+
+      - name: Require Azure environment configuration
+        env:
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          AZURE_FUNCTIONAPP_NAME: ${{ vars.AZURE_FUNCTIONAPP_NAME }}
+          AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+        run: |
+          : "${AZURE_CLIENT_ID:?Set the azure-dev AZURE_CLIENT_ID variable}"
+          : "${AZURE_TENANT_ID:?Set the azure-dev AZURE_TENANT_ID variable}"
+          : "${AZURE_SUBSCRIPTION_ID:?Set the azure-dev AZURE_SUBSCRIPTION_ID variable}"
+          : "${AZURE_FUNCTIONAPP_NAME:?Set the azure-dev AZURE_FUNCTIONAPP_NAME variable}"
+          : "${AZURE_RESOURCE_GROUP:?Set the azure-dev AZURE_RESOURCE_GROUP variable}"
+
+      - name: Log in to Azure using OIDC
+        uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy to Flex Consumption with OneDeploy
+        uses: Azure/functions-action@c5060b3b8bb1ebbcb531abd00c822ecbaa8ea656 # v1
+        with:
+          app-name: ${{ vars.AZURE_FUNCTIONAPP_NAME }}
+          package: api-artifact
+          sku: flexconsumption
+          remote-build: false
+
+      - name: Start the quota-ready app
+        env:
+          AZURE_FUNCTIONAPP_NAME: ${{ vars.AZURE_FUNCTIONAPP_NAME }}
+          AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+        run: az functionapp start --name "$AZURE_FUNCTIONAPP_NAME" --resource-group "$AZURE_RESOURCE_GROUP"

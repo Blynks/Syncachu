@@ -4,7 +4,7 @@ import { StatusBar } from 'expo-status-bar';
 import { fetch } from 'expo/fetch';
 import { GoogleSignin, isSuccessResponse } from '@react-native-google-signin/google-signin';
 import { BLOB_HOST, configurationError } from './src/api';
-import { checkCancelled, MediaItem, trustedBlobUrl } from './src/core';
+import { checkCancelled, formatStorageBytes, MediaItem, trustedBlobUrl } from './src/core';
 import { SyncEngine } from './src/engine';
 
 function Action({ title, onPress, disabled = false, secondary = false }: {
@@ -81,6 +81,16 @@ function Library({ engine, email, onSignOut }: { engine: SyncEngine; email: stri
       <Text style={styles.heroText}>Original photos and videos, safely in your own cloud. Your device library stays untouched.</Text>
       <View style={styles.badge}><Text style={styles.badgeText}>{!state.active ? 'Paused · app is not active' : !state.online ? 'Offline · queue saved' : !state.allowMobile ? 'Uploads · Wi-Fi only' : 'Uploads · any connected network'}</Text></View>
     </View>
+    <View style={styles.panel}>
+      <Text accessibilityRole="header" style={styles.heading}>Instance storage</Text>
+      {state.usage ? <>
+        <Text style={styles.label}>{formatStorageBytes(state.usage.usedBytes)} saved / {formatStorageBytes(state.usage.limitBytes)} total</Text>
+        <Text style={styles.muted}>{formatStorageBytes(state.usage.reservedBytes)} reserved for uploads · {formatStorageBytes(state.usage.availableBytes)} available</Text>
+      </> : <Text accessibilityRole={state.usageError ? 'alert' : undefined} style={styles.muted}>
+        {state.usageError || (state.usageBusy ? 'Loading storage usage…' : 'Storage usage unavailable. Tap Refresh.')}
+      </Text>}
+      <Text style={styles.note}>Shared across approved accounts. Counts saved originals, thumbnails, and upload reservations, not your Azure bill.</Text>
+    </View>
     {!state.ready ? <ActivityIndicator accessibilityLabel="Loading saved queue" color="#405D80" /> : <>
       <View style={styles.actions}>
         <Action title="Choose files" onPress={() => { void engine.pick(); }} />
@@ -114,7 +124,8 @@ function Library({ engine, email, onSignOut }: { engine: SyncEngine; email: stri
     {pending.length > visibleQueue && <Action title="Show more queued files" secondary onPress={() => setVisibleQueue(value => value + 20)} />}
     {pending.some(item => item.status === 'error') && <Action title="Retry failed uploads" onPress={() => { void engine.retry(); }} />}
     <View style={styles.row}><Text accessibilityRole="header" style={styles.heading}>Saved memories</Text>
-      <Action title={state.galleryBusy ? 'Loading…' : 'Refresh'} secondary disabled={state.galleryBusy} onPress={() => { void engine.loadGallery(); }} /></View>
+      <Action title={state.galleryBusy || state.usageBusy ? 'Loading…' : 'Refresh'} secondary disabled={state.galleryBusy || state.usageBusy}
+        onPress={() => { void engine.loadGallery(); void engine.loadUsage(); }} /></View>
     <Text style={styles.note}>Private, short-lived previews. Tap Refresh to load your cloud library or renew expired links.</Text>
   </View>;
   return <FlatList data={state.gallery} numColumns={2} keyExtractor={item => item.id} ListHeaderComponent={header}
@@ -149,7 +160,14 @@ export default function App() {
       const result = await GoogleSignin.signIn();
       if (isSuccessResponse(result)) {
         if (!result.data.idToken) throw new Error('No Google ID token. Check the web OAuth client configuration.');
-        setAccount({ engine: new SyncEngine(result.data.user.id), email: result.data.user.email });
+        const engine = new SyncEngine(result.data.user.id);
+        try {
+          await engine.api.request('usage');
+          setAccount({ engine, email: result.data.user.email });
+        } catch (error) {
+          await engine.destroy();
+          throw error;
+        }
       }
     } catch (error) { setError(error instanceof Error ? error.message : 'Sign-in failed. Please try again.'); }
     finally { authBusy.current = false; setBusy(false); }

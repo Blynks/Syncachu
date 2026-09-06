@@ -17,15 +17,30 @@ Keep the app open during backup. Device-only media is never deleted.
 
 - `mobile/`: Expo application, network policy, and resumable upload queue.
 - `api/`: authenticated Azure Functions API and private Blob Storage adapter.
+- `infra/`: private-beta Bicep provisioning, OIDC deployment guide, and settings.
+
+## Private-beta foundation
+
+The API now admits only explicitly approved, verified Google email addresses.
+The default quota is **1 TB total across the instance** (1,000,000,000,000 bytes),
+shared by all approved accounts. Azure Table Storage atomically reserves capacity
+before issuing upload URLs and charges each finalized per-user original and its
+thumbnail once. The app displays used, reserved, and available storage.
+
+Follow [the private deployment guide](infra/README.md) for reproducible Azure
+provisioning, the manually triggered GitHub Actions/OIDC deployment, and EAS
+internal Android/iOS builds. This does not add OS background backup, restore,
+cloud deletion, or deletion of backed-up device originals.
 
 ## Security model
 
 - The API verifies Google ID tokens, including issuer, audience, and expiry.
   Configure only the OAuth client IDs belonging to your application.
-- There is no separate invitation list or per-account storage quota yet. Any
-  Google user who can sign in to those OAuth clients can create backups. Keep
-  OAuth access restricted to intended test users until you add production abuse
-  controls and cost limits.
+- `ALLOWED_GOOGLE_EMAILS` is a server-side private-beta allowlist. Missing/empty
+  configuration fails closed; tokens must have a matching verified email.
+  Changing it requires restarting/redeploying the Function App. The quota is
+  instance-wide, not per-account. Approved users can see aggregate instance usage,
+  but cannot see another account's media.
 - Each Google account has a separate server-derived storage namespace.
 - The API uses Azure credentials on the server, preferably managed identity.
   **Never put Azure storage keys, service-account credentials, or OAuth client
@@ -65,6 +80,10 @@ Keep the app open during backup. Device-only media is never deleted.
 3. Grant the function identity **Storage Blob Data Contributor** at the media
    **storage-account** scope. Account scope is needed to request user-delegation
    keys, not just access blobs in a container. Allow time for RBAC propagation.
+   Create the `syncachuquota` table and grant **Storage Table Data Contributor**
+   on that table (or media account). The quota initializer also needs this role
+   and Blob Data Reader on the media container. Keep the account's default tier
+   Hot; the API explicitly promotes new originals to Cool and thumbnails to Hot.
 4. For local development, run `az login` and grant your developer identity the
    same role on a development media account. The API uses
    `DefaultAzureCredential`; production should use its managed identity.
@@ -105,13 +124,52 @@ The API requires:
 | Setting | Value |
 | --- | --- |
 | `GOOGLE_CLIENT_IDS` | Comma-separated Web/native Google client IDs accepted as audiences or authorized parties |
+| `ALLOWED_GOOGLE_EMAILS` | Comma-separated approved verified Google emails; no wildcards |
 | `AZURE_STORAGE_ACCOUNT_URL` | `https://YOUR_ACCOUNT.blob.core.windows.net` |
 | `AZURE_STORAGE_CONTAINER` | Private media container name, normally `media` |
+| `AZURE_QUOTA_TABLE` | Existing Table Storage quota table, normally `syncachuquota` |
+| `STORAGE_QUOTA_BYTES` | Total instance limit in bytes, default `1000000000000` (decimal 1 TB) |
 
 Replace the placeholders in `local.settings.json`, including the separate host
 storage account. The `api/.env.example` file lists settings for deployment, but
 Azure Functions does not load it automatically. Keep `local.settings.json` local.
-Run `az login`, then `npm start` to build and start the Functions host.
+Run `az login`. Before first startup, initialize the quota as described below,
+then use `npm start` to build and start the Functions host.
+
+### Initializing or upgrading quota accounting
+
+Create the private media container and quota table first. Stop any old API and
+wait for its in-flight completions to finish before importing an existing
+library. Do not let another writer modify the catalog while initialization runs.
+Set `AZURE_STORAGE_ACCOUNT_URL`, `AZURE_STORAGE_CONTAINER`, `AZURE_QUOTA_TABLE`,
+and `STORAGE_QUOTA_BYTES` in your shell, then run `npm run quota:init` in `api/`.
+This administrative command reads shell environment variables, **not**
+`local.settings.json`. Use your local `az login`; do not set a production
+`AZURE_CLIENT_ID` on a developer machine.
+
+The initializer reads all finalized catalog records and their actual blob sizes,
+including thumbnails, before marking accounting ready. Interrupted imports can
+be retried without double counting. A ready ledger is never reset by rerunning
+the command. Existing libraries above the limit remain accounted for, but cannot
+add uploads until sufficient capacity is available. Missing or incomplete
+initialization blocks new uploads and the usage endpoint with HTTP 503.
+
+Upload reservations include the declared original size plus up to 1 MiB for a
+thumbnail. Completion replaces that reservation with actual finalized bytes.
+Unpublished reservations expire after 24 hours and are reclaimed by a timer
+every 15 minutes; cancelling a local queue item does not immediately free its
+server reservation. Once verified media starts publication, its reservation
+does not expire unless the canonical media has already been charged. Retry an
+interrupted completion: do not delete ledger rows to reclaim capacity, because
+the original may already exist. Unresolved publication failures require
+administrator investigation. The app pauses further uploads on a quota error;
+use Retry once space or the configured limit is available.
+
+**This is a logical media quota, not a storage-account or spending cap.** Staging
+blobs, snapshots, versions, soft-deleted files, orphaned copies, catalog/ledger
+metadata, and service logs can consume additional storage. Blob SAS grants
+cannot constrain PUT payload size; uploaded content is checked at finalization.
+Keep the beta allowlist small, apply staging cleanup, and configure budget alerts.
 
 For identity-based host storage, the host/developer identity also needs **Storage
 Blob Data Owner** on the host storage account. Additional host roles depend on
@@ -173,6 +231,7 @@ using the bearer authentication scheme.
 | `POST /api/uploads/{uploadId}/renew` | Renew scoped URLs for an owned upload |
 | `POST /api/uploads/{uploadId}/complete` | Verify and finalize uploaded media |
 | `GET /api/media?cursor=...` | Page through the current user's finalized media |
+| `GET /api/usage` | Read shared instance used/reserved/available bytes and its quota |
 
 The phone hashes the original bytes, stages deterministic blocks directly to
 Azure using SAS, commits the block list, uploads its JPEG thumbnail, and asks the

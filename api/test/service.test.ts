@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { test } from "node:test";
-import { MediaService, validateInput, verifyStream } from "../src/service.js";
+import { validateInput, verifyStream } from "../src/service.js";
 import { ApiError, MAX_MEDIA_SIZE, MAX_THUMBNAIL_SIZE, SAS_LIFETIME_MS, TICKET_LIFETIME_MS, type UploadTicket } from "../src/types.js";
 import { MemoryStorage } from "./memory.js";
 
@@ -28,7 +28,7 @@ test("upload input rejects malformed types, paths in hashes, unsafe MIME, bad si
 
 test("completion hashes actual stream, snapshots before reading, and is idempotent", async () => {
   const store = new MemoryStorage();
-  const service = new MediaService(store);
+  const service = store.service();
   const ticket = await service.begin(owner, input) as UploadTicket;
   assert.equal(ticket.duplicate, false);
   assert.equal(ticket.blockSize, 4_194_304);
@@ -44,7 +44,7 @@ test("completion hashes actual stream, snapshots before reading, and is idempote
 
 test("staging mutation while verification runs cannot alter promoted original", async () => {
   const store = new MemoryStorage();
-  const service = new MediaService(store);
+  const service = store.service();
   const ticket = await service.begin(owner, input) as UploadTicket;
   store.stage(owner, ticket.uploadId, data);
   store.onRead = () => store.stage(owner, ticket.uploadId, Buffer.from("evil-mutation"));
@@ -55,7 +55,7 @@ test("staging mutation while verification runs cannot alter promoted original", 
 test("wrong real digest, declared size, truncated and oversized streams never finalize", async () => {
   for (const uploaded of [Buffer.from("wrong-content"), Buffer.from("short"), Buffer.from("longer-than-original")]) {
     const store = new MemoryStorage();
-    const service = new MediaService(store);
+    const service = store.service();
     const ticket = await service.begin(owner, input) as UploadTicket;
     store.stage(owner, ticket.uploadId, uploaded);
     await assert.rejects(service.complete(owner, ticket.uploadId), rejects(409));
@@ -70,7 +70,7 @@ test("wrong real digest, declared size, truncated and oversized streams never fi
 
 test("missing uploads and oversized stored originals fail before reading or promotion", async () => {
   const store = new MemoryStorage();
-  const service = new MediaService(store);
+  const service = store.service();
   const ticket = await service.begin(owner, input) as UploadTicket;
   await assert.rejects(service.complete(owner, ticket.uploadId), rejects(409));
   store.snapshot = async () => ({ blobName: "staging", snapshot: "oversized", size: MAX_MEDIA_SIZE + 1 });
@@ -81,7 +81,7 @@ test("missing uploads and oversized stored originals fail before reading or prom
 
 test("cross-user renew, completion, dedup, gallery, and cursors are isolated", async () => {
   const store = new MemoryStorage();
-  const service = new MediaService(store);
+  const service = store.service();
   const ticket = await service.begin(owner, input) as UploadTicket;
   await assert.rejects(service.renew(other, ticket.uploadId), rejects(404));
   await assert.rejects(service.complete(other, ticket.uploadId), rejects(404));
@@ -102,7 +102,7 @@ test("cross-user renew, completion, dedup, gallery, and cursors are isolated", a
 
 test("upload ID validation and persisted ownership are enforced", async () => {
   const store = new MemoryStorage();
-  const service = new MediaService(store);
+  const service = store.service();
   await assert.rejects(service.renew(owner, "../other"), rejects(400));
   const ticket = await service.begin(owner, input) as UploadTicket;
   const saved = store.tickets.get(`${owner}/${ticket.uploadId}`)!;
@@ -113,7 +113,7 @@ test("upload ID validation and persisted ownership are enforced", async () => {
 test("SAS renewal capped at ticket age; completed uploads stay idempotent after expiry", async () => {
   let now = Date.UTC(2026, 0, 1);
   const store = new MemoryStorage();
-  const service = new MediaService(store, () => now);
+  const service = store.service(() => now);
   const ticket = await service.begin(owner, input) as UploadTicket;
   assert.equal(Date.parse(ticket.expiresAt), now + SAS_LIFETIME_MS);
   now += TICKET_LIFETIME_MS - 1_000;
@@ -130,7 +130,7 @@ test("SAS renewal capped at ticket age; completed uploads stay idempotent after 
 
 test("concurrent duplicate completions use one immutable original and one stable index", async () => {
   const store = new MemoryStorage();
-  const service = new MediaService(store);
+  const service = store.service();
   const first = await service.begin(owner, input) as UploadTicket;
   const second = await service.begin(owner, { ...input, name: "second.jpg" }) as UploadTicket;
   store.stage(owner, first.uploadId, data);
@@ -144,7 +144,7 @@ test("concurrent duplicate completions use one immutable original and one stable
 
 test("interrupted verification cleans only its snapshots and can resume from the same staging upload", async () => {
   const store = new MemoryStorage();
-  const service = new MediaService(store);
+  const service = store.service();
   const ticket = await service.begin(owner, input) as UploadTicket;
   store.stage(owner, ticket.uploadId, data);
   const readSnapshot = store.readSnapshot.bind(store);
@@ -162,7 +162,7 @@ test("interrupted verification cleans only its snapshots and can resume from the
 
 test("interruption after promotion leaves no gallery entry and retry reuses immutable canonical data", async () => {
   const store = new MemoryStorage();
-  const service = new MediaService(store);
+  const service = store.service();
   const ticket = await service.begin(owner, input) as UploadTicket;
   store.stage(owner, ticket.uploadId, data);
   const finalize = store.finalize.bind(store);
@@ -180,7 +180,7 @@ test("interruption after promotion leaves no gallery entry and retry reuses immu
 
 test("lost response after finalization is safely replayed without accessing mutable staging", async () => {
   const store = new MemoryStorage();
-  const service = new MediaService(store);
+  const service = store.service();
   const ticket = await service.begin(owner, input) as UploadTicket;
   store.stage(owner, ticket.uploadId, data);
   const mediaUrls = store.mediaUrls.bind(store);
@@ -201,7 +201,7 @@ test("thumbnails must be uploaded, <=1MiB and JPEG including split header/traile
     createHash("sha256").update(jpeg).digest("hex"));
   for (const thumbnail of [undefined, Buffer.from("not JPEG"), Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(MAX_THUMBNAIL_SIZE + 1)]) {
     const store = new MemoryStorage();
-    const service = new MediaService(store);
+    const service = store.service();
     const ticket = await service.begin(owner, { ...input, hasThumbnail: true }) as UploadTicket;
     store.stage(owner, ticket.uploadId, data);
     if (thumbnail) store.stage(owner, ticket.uploadId, thumbnail, true);
@@ -210,7 +210,7 @@ test("thumbnails must be uploaded, <=1MiB and JPEG including split header/traile
     assert.equal(store.snapshots.size, 0);
   }
   const store = new MemoryStorage();
-  const service = new MediaService(store);
+  const service = store.service();
   const ticket = await service.begin(owner, { ...input, hasThumbnail: true }) as UploadTicket;
   assert.ok(ticket.thumbnailUploadUrl);
   store.stage(owner, ticket.uploadId, data);

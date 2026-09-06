@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { QuotaLedger } from "./quota.js";
 import {
   ApiError, MAX_MEDIA_SIZE, MAX_THUMBNAIL_SIZE, SAS_LIFETIME_MS, TICKET_LIFETIME_MS,
   type MediaItem, type Snapshot, type Storage, type StoredMedia, type Ticket, type UploadInput,
@@ -53,7 +54,9 @@ export async function verifyStream(
 }
 
 export class MediaService {
-  constructor(private readonly storage: Storage, private readonly now: () => number = Date.now) {}
+  constructor(private readonly storage: Storage, private readonly quota: QuotaLedger, private readonly now: () => number = Date.now) {}
+
+  usage() { return this.quota.usage(); }
 
   private async ticket(owner: string, uploadId: string): Promise<Ticket> {
     if (!idPattern.test(uploadId)) throw new ApiError(400, "Invalid upload ID");
@@ -76,21 +79,28 @@ export class MediaService {
 
   async begin(owner: string, body: unknown): Promise<{ duplicate: true; media: MediaItem } | UploadTicket> {
     const input = validateInput(body);
+    await this.quota.usage();
     const existing = await this.storage.getMedia(owner, input.sha256);
     if (existing) return { duplicate: true, media: await this.storage.mediaUrls(owner, existing) };
     const ticket: Ticket = { ...input, owner, uploadId: randomUUID(), createdAt: new Date(this.now()).toISOString() };
+    await this.quota.reserve(ticket);
     await this.storage.createTicket(ticket);
     return this.issue(ticket);
   }
 
   async renew(owner: string, uploadId: string): Promise<UploadTicket> {
-    return this.issue(await this.ticket(owner, uploadId));
+    const ticket = await this.ticket(owner, uploadId);
+    await this.quota.check(ticket);
+    return this.issue(ticket);
   }
 
   async complete(owner: string, uploadId: string): Promise<MediaItem> {
     const ticket = await this.ticket(owner, uploadId);
     const existing = await this.storage.getMedia(owner, ticket.sha256);
-    if (existing) return this.storage.mediaUrls(owner, existing);
+    if (existing) {
+      await this.quota.settle(ticket, existing);
+      return this.storage.mediaUrls(owner, existing);
+    }
     this.assertActive(ticket);
     const snapshots: Snapshot[] = [];
     try {
@@ -107,15 +117,17 @@ export class MediaService {
         if (thumbnail.size > MAX_THUMBNAIL_SIZE) throw new ApiError(413, "Thumbnail exceeds 1 MiB limit");
         thumbnailDigest = await verifyStream(await this.storage.readSnapshot(thumbnail), thumbnail.size, undefined, true);
       }
+      await this.quota.claim(ticket);
       let media: StoredMedia = await this.storage.promoteOriginal(owner, original, {
         id: ticket.sha256, name: ticket.name, size: ticket.size, contentType: ticket.contentType,
         createdAt: new Date(this.now()).toISOString(),
       });
       if (thumbnail && thumbnailDigest) {
         const thumbnailKey = await this.storage.promoteThumbnail(owner, ticket.sha256, thumbnailDigest, thumbnail);
-        media = { ...media, thumbnailKey };
+        media = { ...media, thumbnailKey, thumbnailSize: thumbnail.size };
       }
       media = await this.storage.finalize(owner, media);
+      await this.quota.settle(ticket, media);
       return await this.storage.mediaUrls(owner, media);
     } finally {
       // Remove only this request's immutable snapshots; other completions may use the staging blob.

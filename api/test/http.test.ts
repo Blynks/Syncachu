@@ -3,7 +3,6 @@ import { createHash } from "node:crypto";
 import { test } from "node:test";
 import functions from "@azure/functions";
 import { createHandler, type Dependencies } from "../src/http.js";
-import { MediaService } from "../src/service.js";
 import { ApiError } from "../src/types.js";
 import type { MediaItem, UploadTicket } from "../src/types.js";
 import { MemoryStorage } from "./memory.js";
@@ -14,7 +13,7 @@ function request(body: string, headers: Record<string, string> = { "content-type
 }
 
 test("every protected route authenticates before body parsing or storage calls", async () => {
-  for (const route of ["begin", "renew", "complete", "gallery"] as const) {
+  for (const route of ["begin", "renew", "complete", "gallery", "usage"] as const) {
     let accessed = false;
     const handler = createHandler(route, () => ({
       authenticate: async () => { throw new ApiError(401, "Unauthorized"); },
@@ -32,7 +31,7 @@ test("every protected route authenticates before body parsing or storage calls",
 test("request JSON, content type and streamed body size are bounded after authentication", async () => {
   const dependencies: Dependencies = {
     authenticate: async () => "owner",
-    service: async () => new MediaService(new MemoryStorage()),
+    service: async () => new MemoryStorage().service(),
   };
   const handler = createHandler("begin", () => dependencies);
   assert.equal((await handler(request("not json"))).status, 400);
@@ -54,7 +53,7 @@ test("unexpected errors are sanitized without exposing tokens or storage interna
 
 test("HTTP upload, renewal, completion and gallery preserve the shared API contract", async () => {
   const store = new MemoryStorage();
-  const dependencies: Dependencies = { authenticate: async () => "owner", service: async () => new MediaService(store) };
+  const dependencies: Dependencies = { authenticate: async () => "owner", service: async () => store.service() };
   const data = Buffer.from("photo-content");
   const body = {
     sha256: createHash("sha256").update(data).digest("hex"), size: data.length,
@@ -84,4 +83,19 @@ test("HTTP upload, renewal, completion and gallery preserve the shared API contr
   assert.deepEqual(gallery.jsonBody, { items: [completed.jsonBody] });
   const duplicate = await createHandler("begin", () => dependencies)(request(JSON.stringify(body)));
   assert.deepEqual(duplicate.jsonBody, { duplicate: true, media: completed.jsonBody });
+  const usage = await createHandler("usage", () => dependencies)(new HttpRequest({ method: "GET", url: "https://api.test/api/usage" }));
+  assert.equal(usage.status, 200);
+  assert.deepEqual(usage.jsonBody, { limitBytes: 1_000_000_000_000, usedBytes: data.length, reservedBytes: 0, availableBytes: 1_000_000_000_000 - data.length });
+});
+
+test("unapproved accounts are forbidden before any cloud access", async () => {
+  for (const route of ["begin", "renew", "complete", "gallery", "usage"] as const) {
+    let accessed = false;
+    const response = await createHandler(route, () => ({
+      authenticate: async () => { throw new ApiError(403, "Account not approved"); },
+      service: async () => { accessed = true; return new MemoryStorage().service(); },
+    }))(request("{}"));
+    assert.equal(response.status, 403);
+    assert.equal(accessed, false);
+  }
 });

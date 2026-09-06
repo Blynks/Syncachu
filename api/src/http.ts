@@ -2,7 +2,7 @@ import type { HttpRequest, HttpResponseInit } from "@azure/functions";
 import { ApiError } from "./types.js";
 import type { MediaService } from "./service.js";
 
-type Route = "begin" | "renew" | "complete" | "gallery";
+type Route = "begin" | "renew" | "complete" | "gallery" | "usage";
 export interface Dependencies {
   authenticate(authorization: string | null): Promise<string>;
   service(): Promise<MediaService>;
@@ -57,6 +57,7 @@ export function createHandler(route: Route, dependencies: () => Dependencies) {
         case "renew": result = await service.renew(owner, request.params.uploadId ?? ""); break;
         case "complete": result = await service.complete(owner, request.params.uploadId ?? ""); break;
         case "gallery": result = await service.gallery(owner, request.query.get("cursor") ?? undefined); break;
+        case "usage": result = await service.usage(); break;
       }
       return { status: 200, headers, jsonBody: result };
     } catch (error) {

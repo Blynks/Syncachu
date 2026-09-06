@@ -79,3 +79,15 @@ test('private SAS gallery previews never receive Google authorization', () => {
   assert.match(component, /credentials: 'omit'/);
   assert.match(component, /redirect: 'error'/);
 });
+test('storage usage validates totals and uses decimal TB rather than TiB', () => {
+  const { parseStorageUsage, formatStorageBytes } = require('../.test-build/core.js');
+  const usage = { limitBytes: 1e12, usedBytes: 1e9, reservedBytes: 1e9, availableBytes: 1e12 - 2e9 };
+  assert.deepEqual(parseStorageUsage(usage), usage);
+  for (const value of [null, {}, { ...usage, usedBytes: -1 }, { ...usage, reservedBytes: '1' }, { ...usage, availableBytes: 1e12 }]) {
+    assert.throws(() => parseStorageUsage(value), /Invalid storage usage/);
+  }
+  assert.equal(formatStorageBytes(1e12), '1 TB');
+  assert.equal(formatStorageBytes(1e9), '1 GB');
+  assert.deepEqual(parseStorageUsage({ limitBytes: 10, usedBytes: 12, reservedBytes: 0, availableBytes: 0 }),
+    { limitBytes: 10, usedBytes: 12, reservedBytes: 0, availableBytes: 0 });
+});

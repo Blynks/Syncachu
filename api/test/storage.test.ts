@@ -4,12 +4,15 @@ import { Readable } from "node:stream";
 import { test } from "node:test";
 import type { BlobServiceClient, UserDelegationKey } from "@azure/storage-blob";
 import { AzureBlobStorage } from "../src/storage.js";
-import { loadConfig } from "../src/config.js";
+import { loadConfig, loadStorageConfig } from "../src/config.js";
 import { SAS_LIFETIME_MS, type StoredMedia, type Ticket } from "../src/types.js";
 
 const now = Date.UTC(2026, 0, 1);
 const owner = "a".repeat(64);
-const config = { storageAccountUrl: "https://syncachutest.blob.core.windows.net", storageContainer: "media", googleClientIds: ["test-client"] };
+const config = {
+  storageAccountUrl: "https://syncachutest.blob.core.windows.net", storageContainer: "media", googleClientIds: ["test-client"],
+  allowedGoogleEmails: ["owner@example.com"], quotaTable: "syncachuquota", quotaBytes: 1_000_000_000_000,
+};
 const ticket: Ticket = {
   owner, uploadId: "12345678-1234-4234-8234-123456789abc", createdAt: new Date(now).toISOString(),
   sha256: "b".repeat(64), size: 3, contentType: "image/jpeg", name: "café.jpg", hasThumbnail: true,
@@ -71,6 +74,7 @@ function mockSdk() {
       getBlobClient: client,
       getBlockBlobClient: client,
       listBlobsFlat: (options: Record<string, unknown>) => ({
+        async *[Symbol.asyncIterator]() { for (const name of listNames) yield { name }; },
         byPage: (paging: Record<string, unknown>) => ({
           next: async () => {
             calls.push({ name: "list", options: { ...options, ...paging } });
@@ -89,16 +93,21 @@ function mockSdk() {
 }
 
 test("only HTTPS Azure accounts and explicit audiences/private container names are accepted", () => {
-  assert.deepEqual(loadConfig({ GOOGLE_CLIENT_IDS: " a, b,a ", AZURE_STORAGE_ACCOUNT_URL: config.storageAccountUrl }), {
+  assert.deepEqual(loadConfig({ GOOGLE_CLIENT_IDS: " a, b,a ", ALLOWED_GOOGLE_EMAILS: " Owner@example.com ", AZURE_STORAGE_ACCOUNT_URL: config.storageAccountUrl }), {
     ...config, googleClientIds: ["a", "b"],
   });
   for (const value of ["http://test.blob.core.windows.net", "https://attacker.test", "https://abc.blob.core.windows.net/path"]) {
-    assert.throws(() => loadConfig({ GOOGLE_CLIENT_IDS: "a", AZURE_STORAGE_ACCOUNT_URL: value }));
+    assert.throws(() => loadStorageConfig({ AZURE_STORAGE_ACCOUNT_URL: value }));
   }
   assert.throws(() => loadConfig({ GOOGLE_CLIENT_IDS: "*", AZURE_STORAGE_ACCOUNT_URL: config.storageAccountUrl }));
   for (const container of ["ab", "Upper", "a--b", "a/b"]) {
-    assert.throws(() => loadConfig({ GOOGLE_CLIENT_IDS: "a", AZURE_STORAGE_ACCOUNT_URL: config.storageAccountUrl, AZURE_STORAGE_CONTAINER: container }));
+    assert.throws(() => loadStorageConfig({ AZURE_STORAGE_ACCOUNT_URL: config.storageAccountUrl, AZURE_STORAGE_CONTAINER: container }));
   }
+  for (const quota of ["0", "-1", "1.5", "1e12", "9007199254740992", ""]) {
+    assert.throws(() => loadStorageConfig({ AZURE_STORAGE_ACCOUNT_URL: config.storageAccountUrl, STORAGE_QUOTA_BYTES: quota }));
+  }
+  assert.throws(() => loadConfig({ GOOGLE_CLIENT_IDS: "a", AZURE_STORAGE_ACCOUNT_URL: config.storageAccountUrl }));
+  assert.throws(() => loadStorageConfig({ AZURE_STORAGE_ACCOUNT_URL: config.storageAccountUrl, AZURE_QUOTA_TABLE: "a-b" }));
 });
 
 test("public containers fail closed", async () => {
@@ -159,6 +168,7 @@ test("SDK adapter snapshots immutable input, streams downloads, promotes synchro
   assert.equal(source.searchParams.get("sp"), "r");
   assert.deepEqual(promotion.options?.conditions, { ifNoneMatch: "*" });
   assert.equal(promotion.options?.copySourceBlobProperties, false);
+  assert.equal(promotion.options?.tier, "Cool");
   assert.equal(mock.data.get(promotion.path!)?.toString(), "abc");
   assert.deepEqual(await mock.storage.promoteOriginal(owner, snapshot, { ...media, name: "loser.jpg" }), media);
   await mock.storage.removeSnapshot(snapshot);
@@ -194,4 +204,18 @@ test("server metadata reads are bounded even if storage is corrupted", async () 
   const mock = mockSdk();
   mock.data.set(`users/${owner}/index/${media.id}.json`, Buffer.alloc(16 * 1024 + 1));
   await assert.rejects(mock.storage.getMedia(owner, media.id), /Metadata limit/);
+});
+
+test("quota migration reads every owner's actual originals and private thumbnail sizes", async () => {
+  const mock = mockSdk();
+  const thumbnailKey = `users/${owner}/final/${media.id}/thumbnails/thumb.jpg`;
+  await mock.storage.finalize(owner, { ...media, thumbnailKey });
+  mock.data.set(thumbnailKey, Buffer.alloc(7));
+  mock.listNames([`users/${owner}/index/${media.id}.json`, thumbnailKey]);
+  const records = [];
+  for await (const record of mock.storage.quotaRecords()) records.push(record);
+  assert.deepEqual(records, [{ owner, id: media.id, bytes: 10 }]);
+  assert.ok(mock.calls.filter(call => call.name === "json").every(call => call.options?.tier === "Hot"));
+  mock.data.set(`users/${owner}/final/${media.id}/original`, Buffer.alloc(2));
+  await assert.rejects(async () => { for await (const _record of mock.storage.quotaRecords()) {} }, /Original size differs/);
 });
