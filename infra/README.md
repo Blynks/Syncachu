@@ -1,15 +1,48 @@
-# Private-beta deployment
+[Syncachu](../README.md) / [Documentation](../docs/README.md) / Deployment runbook
 
-This foundation deploys the API to Azure Functions **Flex Consumption, Node.js
-22**, and distributes native builds only to invited testers. Provisioning, quota
-initialization, and GitHub/Expo identity setup are explicit operator actions.
-Nothing here provisions resources merely by cloning the repository or pushing code.
+# Deployment runbook
 
-**Private means authenticated and invite-only, not private networking.** The API
-and storage HTTPS endpoints remain Internet-reachable for phones and GitHub-hosted
-runners. Containers forbid anonymous reads; clients receive short-lived,
-blob-scoped user-delegation SAS URLs. Do not turn off public network access without
-designing the corresponding VNet, DNS, runner, and mobile connectivity.
+Provision an invite-only Syncachu instance on Azure Functions **Flex Consumption,
+Node.js 22**, then distribute internal Android and iOS builds. This runbook is for
+authorized operators managing their own Azure, Google, GitHub, and Expo projects.
+
+Provisioning, quota initialization, and identity setup are explicit operator
+actions. Cloning the repository or pushing code does not provision resources or
+trigger a deployment.
+
+> [!IMPORTANT]
+> **Private means authenticated and invite-only, not private networking.** The API
+> and storage HTTPS endpoints remain Internet-reachable for phones and
+> GitHub-hosted runners. Containers forbid anonymous reads; clients receive
+> short-lived, blob-scoped user-delegation SAS URLs. Do not turn off public network
+> access without designing the corresponding VNet, DNS, runner, and mobile connectivity.
+
+## Deployment path
+
+Complete these stages in order for a new installation. Later code deployments
+reuse the initialized ledger and existing identity configuration.
+
+| Stage | Action | Ready to continue when... |
+| --- | --- | --- |
+| 1 | [Prepare and provision](#1-prepare-and-provision) | The reviewed Bicep deployment succeeds and scoped roles have propagated. |
+| 2 | [Initialize quota](#2-initialize-the-global-quota-before-first-api-start) | The initializer succeeds with no legacy catalog writers running. |
+| 3 | [Configure GitHub OIDC](#3-bootstrap-protected-github-oidc-once) | The protected `azure-dev` environment and separate deployment identity are configured. |
+| 4 | [Deploy the API](#4-deploy-the-api-manually) | The manually approved deployment and authenticated live acceptance checks succeed. |
+| 5 | [Distribute native builds](#5-distribute-only-internal-native-builds) | Android/iOS native builds and device acceptance pass, and internal build links are restricted. |
+
+**Reference:** [Resources and access](#resources-and-access) |
+[Cost and recovery](#cost-recovery-and-validation-boundaries) |
+[Release checklist](#release-checklist) | [Upstream documentation](#references)
+
+| Repository reference | Purpose |
+| --- | --- |
+| [`main.bicep`](main.bicep) | Resource-group-scoped Azure provisioning. |
+| [`private-beta.bicepparam`](private-beta.bicepparam) | Environment-driven provisioning parameters. |
+| [`deploy-azure-dev.yml`](../.github/workflows/deploy-azure-dev.yml) | Manually triggered API build and protected OIDC deployment. |
+| [`mobile/eas.json`](../mobile/eas.json) | Internal native build profile. |
+
+For local development rather than hosted deployment, see
+[Getting started](../docs/getting-started.md).
 
 ## Resources and access
 
@@ -48,6 +81,8 @@ timer triggers do not require host Queue Data Contributor or Storage Account
 Contributor. Revisit roles when adding Blob/Queue/Durable bindings rather than
 granting subscription-wide roles preemptively. Allow at least several minutes for
 RBAC propagation; troubleshoot 403s rather than re-enabling shared keys.
+
+### Runtime and package authentication
 
 Host authentication uses `AzureWebJobsStorage__accountName`, `__credential`
 (`managedidentity`), and `__clientId`. `AZURE_CLIENT_ID` selects the runtime
@@ -119,8 +154,13 @@ and quota table, but does **not** initialize the ledger or publish API code.
 Only continue when each command succeeds. Remove the temporary compiled template
 afterward; do not save compiled parameter files or authentication material in Git.
 
-**Existing installations:** do not blindly apply this new-install template over
-arbitrary resources. First stop every old API/other writer and wait for in-flight
+### Existing installations
+
+> [!WARNING]
+> Do not blindly apply this new-install template over arbitrary resources, or
+> replace an existing media account to make a deployment error disappear.
+
+First stop every old API/other writer and wait for in-flight
 finalizations to finish or terminate, then inspect/adapt the template and what-if.
 Keep the existing media account/container and finalized records. The template
 owns the full app settings and media lifecycle policy: merge any existing unrelated
@@ -174,9 +214,11 @@ The initializer scans existing finalized index records, counts original plus
 thumbnail bytes, and initializes the ledger. On an empty installation it initializes
 a zero baseline. It is idempotent; interrupted/failed imports leave quota blocked
 and can be retried while writers remain stopped. A ready ledger is left unchanged.
-**Do not deploy/start on failure, manually create a zero ledger over existing
-media, or treat a rerun as a repair of writes made after initialization.** Before
-initialization the quota-enabled API returns 503 rather than accepting uploads.
+Before initialization the quota-enabled API returns 503 rather than accepting uploads.
+
+> [!WARNING]
+> Do not deploy/start on failure, manually create a zero ledger over existing
+> media, or treat a rerun as a repair of writes made after initialization.
 
 The protected workflow's readiness checkbox is an operator attestation, not an
 automated ledger inspection; the workflow has no media-data role. Record the
@@ -187,6 +229,8 @@ Ordinary upload reservations last 24 hours; a timer checks expiration every 15
 minutes. Reservations already publishing media are conservatively retained after
 an interrupted finalization. Retry completion before abandoning a failed
 publication; do not manually delete ledger entries to reclaim that capacity.
+See [storage and quota](../docs/storage-and-quota.md) for file limits, accounting
+semantics, and cleanup guidance.
 
 ## 3. Bootstrap protected GitHub OIDC once
 
@@ -214,6 +258,8 @@ The **exact environment subject** is essential: a branch-only federated credenti
 does not match jobs using a GitHub environment. Conversely, this environment
 subject contains no branch restriction, so enforce `main` in environment protection
 as well as in the workflow. Never use a wildcard repository/environment trust.
+
+### GitHub environment variables
 
 Set these GitHub **environment variables**, not checked-in files or publish-profile
 secrets, on `azure-dev`:
@@ -272,14 +318,17 @@ link/configure that project, and set its **preview** environment values:
 These values ship in the app and are **public configuration**, never secrets.
 Choose real application identifiers and register the EAS Android signing
 certificate SHA-1 with Google OAuth; use the matching iOS bundle ID/client scheme.
-Follow the root README's Google sign-in setup before building.
+Follow the [Google sign-in setup](../docs/getting-started.md#configure-google-sign-in)
+before building.
 
 Background backup also requires a new native binary: Expo autolinks the local
 `mobile/modules/background-backup` module. The app config registers iOS background
 processing and its bundle-specific task identifier; the Android module declares
 its data-sync foreground service and notification permissions. An OTA JavaScript
-update cannot add these native capabilities. Complete the root README's
-background/device acceptance checks on both platforms before distributing.
+update cannot add these native capabilities. Review
+[background backup behavior](../docs/background-backup.md) and complete the
+[device acceptance checks](../docs/development.md#device-acceptance-checks) on both
+platforms before distributing.
 Local JavaScript tests and bundle exports do not compile these Kotlin/Swift
 workers; successful Android/iOS native builds are also required for release.
 
@@ -305,7 +354,11 @@ delays apply. Android testers install the APK directly after approving their
 device's installation prompt. Neither path requires a public App Store/Play
 release; do not run `eas submit`.
 
-**Internal build links are accessible to anyone with the link by default.**
+### Restrict build access
+
+> [!WARNING]
+> Internal build links are accessible to anyone with the link by default.
+
 Before sharing, in Expo project settings disable **Unauthenticated access to
 internal builds**, and authorize only the intended Expo accounts/team members.
 Share links privately, not in public issues/releases. iOS ad-hoc registration
@@ -337,6 +390,19 @@ actual deployment/start behavior, or native device installation. Those require a
 authorized operator's what-if/provisioning and acceptance run. No live Azure
 deployment or native distribution is implied by these files.
 
+## Release checklist
+
+- [ ] Quota initialization succeeded, and no legacy writer can bypass accounting.
+- [ ] Google audiences, verified-email invitations, managed-identity roles, and
+  protected GitHub environment settings match the intended instance.
+- [ ] Authenticated upload/gallery/usage checks pass; unauthorized API access and
+  unsigned blob access fail; reservation expiry and telemetry work.
+- [ ] Direct API and Blob endpoints do not redirect, including auth/error paths.
+- [ ] Both native builds pass the [device acceptance checks](../docs/development.md#device-acceptance-checks),
+  and internal build access is limited to intended testers.
+- [ ] Budgets, staging cleanup, recovery procedures, and an independent backup
+  plan are in place before storing irreplaceable media.
+
 ## References
 
 - [Flex creation, runtimes, and deployment storage](https://learn.microsoft.com/azure/azure-functions/flex-consumption-how-to)
@@ -346,3 +412,8 @@ deployment or native distribution is implied by these files.
 - [Azure Functions Action OIDC and Flex parameters](https://github.com/Azure/functions-action)
 - [GitHub environment OIDC subject and protection](https://docs.github.com/actions/security-for-github-actions/security-hardening-your-deployments/configuring-openid-connect-in-azure)
 - [EAS internal distribution, ad hoc signing, and private link access](https://docs.expo.dev/build/internal-distribution/)
+
+---
+
+[Documentation index](../docs/README.md) | [Security model](../docs/security.md) |
+[Storage and quota](../docs/storage-and-quota.md)
