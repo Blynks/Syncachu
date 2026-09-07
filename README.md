@@ -9,13 +9,19 @@ The first milestone is **Google sign-in → manual upload → uploaded-media gal
 Sync All and optional auto-sync while the app is open share the same upload queue.
 Uploads default to Wi-Fi only; cellular data requires explicit opt-in.
 
-This is not a continuous background backup service. iOS and Android restrict
-background work, and this MVP does not install a native background upload service.
-Keep the app open during backup. Device-only media is never deleted.
+After you tap **Sync all** or **Choose files**, queued backups use native workers
+and can continue when you switch apps or lock the screen. Keep the app open until
+the library scan finishes: photos not yet discovered are not queued.
+Android uses a foreground service with an ongoing progress notification; iOS
+uses background URLSession transfers and OS-scheduled preparation time.
+This is still not continuous photo-library monitoring. The OS can pause work,
+and force-stopping the app stops backup. Device-only media is never deleted.
 
 ## Layout
 
 - `mobile/`: Expo application, network policy, and resumable upload queue.
+- `mobile/modules/background-backup/`: local Expo module with Android and iOS
+  native backup workers; included by Expo autolinking in new native builds.
 - `api/`: authenticated Azure Functions API and private Blob Storage adapter.
 - `infra/`: private-beta Bicep provisioning, OIDC deployment guide, and settings.
 
@@ -29,8 +35,8 @@ thumbnail once. The app displays used, reserved, and available storage.
 
 Follow [the private deployment guide](infra/README.md) for reproducible Azure
 provisioning, the manually triggered GitHub Actions/OIDC deployment, and EAS
-internal Android/iOS builds. This does not add OS background backup, restore,
-cloud deletion, or deletion of backed-up device originals.
+internal Android/iOS builds. Restore, cloud deletion, and deletion of backed-up
+device originals are not included.
 
 ## Security model
 
@@ -55,6 +61,22 @@ cloud deletion, or deletion of backed-up device originals.
 - Signing out stops client work, but previously issued SAS URLs remain valid until
   they expire. Storage contains filenames, hashes, sizes, and backup timestamps;
   originals may retain embedded EXIF/location metadata.
+- Background workers use the same scoped SAS grants and authenticated API, not
+  storage keys or a new long-lived server credential. iOS retains its current ID
+  token in device-only Keychain storage for OS relaunch; sign-out removes it.
+  Android keeps its ID token in memory. When authentication expires, reopen the
+  app and tap Retry to refresh credentials. Native staging snapshots and native
+  queue state stay in app-owned storage and are excluded from OS device backups.
+- **iOS background transfers follow HTTP redirects automatically.** Unlike the
+  foreground uploader and Android worker, Apple's background URLSession cannot
+  refuse a redirect before sending the redirected request. Initial destinations
+  are validated and observed redirected results are rejected, but that cannot
+  undo transmission. Configure direct, trusted HTTPS API and Azure Blob endpoints
+  that never redirect; do not put login pages, URL shorteners, canonical-host
+  redirects, or redirecting proxies in front of them. This is an explicit
+  platform tradeoff, not a guarantee that every iOS request remains on its
+  initially validated host. See Apple's
+  [background-session redirect behavior](https://developer.apple.com/documentation/foundation/urlsessiontaskdelegate/urlsession(_:task:willperformhttpredirection:newrequest:completionhandler:)).
 - Azure encrypts data at rest and HTTPS protects transit. This is **not end-to-end
   encryption**: the backend and authorized Azure administrators can read files.
 
@@ -196,12 +218,58 @@ Configure `mobile/.env`:
 | `EXPO_PUBLIC_GOOGLE_IOS_URL_SCHEME` | Reversed iOS client ID from Google |
 | `EXPO_PUBLIC_APP_ID` | Your Android package name and iOS bundle identifier |
 
-The app pins upload/gallery URLs to the configured storage hostname.
+The app validates initial upload/gallery URLs against the configured storage
+hostname. iOS background sessions have the redirect limitation described above.
 A physical device cannot reach your computer through `localhost`;
 use a reachable, trusted HTTPS development endpoint or your deployed API.
 Do not disable TLS validation. Run `npm run android` or `npm run ios` to create
 and launch a native development build. Use `npm start` for subsequent Metro
 development sessions. iOS native builds require macOS and Xcode.
+
+### Background backup behavior
+
+Rebuild and reinstall the development client or EAS beta binary to include the
+local native module. A JavaScript update alone cannot install a native service.
+Older binaries without the module explicitly retain foreground-only uploading.
+
+On Android, allow notifications to see backup progress and the notification's
+stop action. Denying notification permission does not grant extra background
+rights: Android still exposes the foreground service in its Active apps/task
+manager. The service starts from the open app, follows the Wi-Fi/mobile-data
+setting natively, and stops when its queue is finished. There is no boot receiver
+or automatic force-stop recovery. Android's data-sync time limits and vendor
+battery restrictions can pause a long backup; reopen and tap Resume backup.
+
+Wi-Fi-only is enforced conservatively: Android requires validated Wi-Fi without
+a VPN or cellular transport; iOS requires Wi-Fi that is not marked expensive or
+constrained. A hotspot, VPN, or Low Data Mode can therefore leave backup waiting
+even when the phone appears online. Allow mobile data only if using those
+networks is acceptable.
+
+On iOS, URLSession handles file-backed transfers without a running JavaScript
+thread, and its native delegate handles ticket renewal and finalization.
+Preparing originals and thumbnails uses foreground time, a bounded background
+task, or an OS-scheduled processing task. iOS decides when processing runs;
+large libraries may require reopening the app. Low Power Mode, connectivity,
+protected files before first unlock, and a user force-quit can delay or stop
+work. This is not an always-running iOS service.
+
+Native workers keep one working original snapshot per account before hashing
+and transferring it, so enough free device space for that snapshot is required.
+Files copied by Choose files and retained work for signed-out accounts can use
+additional space. Successful native uploads release their private staging files
+after saving a completion receipt, without waiting for the app to reopen.
+Workers persist block checkpoints and completion results; reopening
+reconciles these with the visible queue before acknowledging native results.
+Cancel and sign-out stop native requests as well as foreground work. Neither
+operation deletes media in Photos or MediaStore. Expired sign-in, permission
+changes, quota failures, and unrecoverable transfer errors are shown in the queue;
+use Retry after resolving the cause.
+
+If a failed upload already has a private original snapshot, the native queue
+pauses until that item is retried or cancelled. This preserves its resumable
+bytes without accumulating a second copy of the library on the device. Failures
+before a snapshot is prepared do not prevent other accessible media from backing up.
 
 ## Automated checks
 
@@ -216,9 +284,12 @@ npm audit
 
 API tests cover authentication, request validation, ownership, deduplication,
 immutable snapshot verification, and SAS scoping. Mobile tests cover hashing,
-network policy, upload block planning, and resuming/cancelling uploads. The mobile
-build exports Android/iOS JavaScript bundles; it does not compile or test the
-native Google sign-in SDK on a device.
+network policy, upload block planning, resuming/cancelling uploads, durable native
+queue handoff, completion reconciliation, and sign-out/cancellation races. The
+mobile build exports Android/iOS JavaScript bundles; it does not compile or test
+the native Google sign-in SDK or background workers on a device. Native
+compilation and the device acceptance checks below remain release requirements;
+passing the JavaScript commands alone does not establish background reliability.
 
 ## API flow
 
@@ -253,12 +324,35 @@ tested on a device or emulator:
    enable cellular uploads and verify the changed policy.
 5. Deny photo permission, then grant limited permission. Confirm the app explains
    the restriction and Sync All only includes accessible media.
-6. Enable auto-sync, add a photo while the app is active, and check it uploads.
-   Close the app and confirm the UI/documentation do not promise background work.
+6. Tap Sync all, wait for scanning to finish, then switch apps and lock the
+   screen during a multi-block video. Confirm the Android notification remains
+   visible and iOS URLSession transfers continue when the OS permits. Reopen and
+   check completion appears without re-uploading acknowledged blocks.
 7. Sign out mid-upload, sign in as a second Google account, and confirm neither
    the queue nor gallery exposes the first account's media.
 8. Verify unauthenticated API requests are rejected, direct unsigned blob URLs
    fail, and expired SAS URLs no longer work.
+9. While backgrounded, switch from Wi-Fi to cellular with mobile data disabled;
+   verify transfers wait. Enable cellular in the app, then disable it mid-upload
+   and verify the native worker stops using cellular immediately.
+10. Stop the Android notification/service or force-quit the iOS app. Reopen and
+    use Resume backup/Retry; verify checkpoints survive without false completion.
+    Exercise Android's data-sync service timeout and iOS processing expiration.
+11. Keep a background transfer pending past SAS expiry and past Google ID-token
+    expiry. Check that SAS renewal works, expired sign-in pauses visibly, and
+    reopening/Retry refreshes credentials. Confirm quota errors pause the queue.
+12. Enable auto-sync, add a photo while the app is active, and check it is queued.
+    Photos added while closed must not be advertised as continuously discovered.
+    Test denied notification permission, limited Photos access, low disk space,
+    and cancellation/sign-out while native preparation is in progress.
+13. Confirm the deployed API's create/renew/complete routes and direct Azure
+    endpoints never return redirects, including expired-auth and error paths.
+    Use only disposable data and credentials when exercising redirect behavior.
+14. Back up several large originals while the app is backgrounded and confirm
+    completed native staging is released. Fail one upload after preparation:
+    remaining work must pause until Retry or Cancel. With an earlier preparation
+    failure also queued, Retry failed uploads must finish the retained snapshot
+    before allocating another original. Repeat with Android network backoff.
 
 ## Deployment and operation
 
@@ -286,12 +380,15 @@ tested on a device or emulator:
 
 ## Known limitations
 
-- Auto-sync runs only while the app is active, with permission and network-policy
-  checks. Operating-system background scheduling is a later milestone.
+- Auto-sync discovers new media only while the app is active. Already queued
+  backups can continue natively, subject to OS scheduling, service time limits,
+  connectivity, local media availability, and credential expiry.
 - Media stored only in iCloud or otherwise inaccessible on-device may need to be
   downloaded first. Limited photo-library permission only exposes allowed items.
-- Resuming requires the original local media to remain available. Expired staging
-  data or a removed source file may require restarting that item.
+- Preparation and foreground-only uploads require the local original to remain
+  available. Native uploads resume from their retained private snapshot. If that
+  snapshot is missing or damaged, cancel and select the original again; native
+  workers do not silently replace it with potentially edited device media.
 - Originals are limited to 2 GiB and generated JPEG thumbnails to 1 MiB. Upload
   tickets can be renewed for 24 hours; individual SAS URLs last at most 15 minutes.
   Large-file finalization also depends on Azure throughput and HTTP timeouts;

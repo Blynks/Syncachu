@@ -17,6 +17,14 @@ export default ({ config }: ConfigContext): ExpoConfig => withQueueStorageCapaci
   ios: {
     ...config.ios,
     bundleIdentifier: process.env.EXPO_PUBLIC_APP_ID || 'com.example.syncachu',
+    infoPlist: {
+      ...config.ios?.infoPlist,
+      UIBackgroundModes: [...new Set([...(config.ios?.infoPlist?.UIBackgroundModes ?? []), 'processing'])],
+      BGTaskSchedulerPermittedIdentifiers: [
+        ...new Set([...(config.ios?.infoPlist?.BGTaskSchedulerPermittedIdentifiers ?? []),
+          `${process.env.EXPO_PUBLIC_APP_ID || 'com.example.syncachu'}.backup-processing`]),
+      ],
+    },
   },
   android: {
     ...config.android,

@@ -41,6 +41,10 @@ Module._load = function (request, parent, isMain) {
       removeOwnedFile: uri => removed.push(uri),
     };
     if (request === './upload') return { upload: (...args) => runUpload(...args) };
+    if (request === './background') return { BackgroundBackup: class {
+      available = false;
+      async stop() {}
+    } };
   }
   return originalLoad.call(this, request, parent, isMain);
 };

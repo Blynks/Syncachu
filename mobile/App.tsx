@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { ActivityIndicator, Alert, FlatList, Image, Platform, Pressable, SafeAreaView, StyleSheet, Switch, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, FlatList, Image, PermissionsAndroid, Platform, Pressable, SafeAreaView, StyleSheet, Switch, Text, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { fetch } from 'expo/fetch';
 import { GoogleSignin, isSuccessResponse } from '@react-native-google-signin/google-signin';
@@ -64,10 +64,27 @@ function Library({ engine, email, onSignOut }: { engine: SyncEngine; email: stri
   useEffect(() => { void engine.initialize(); return () => { void engine.destroy(); }; }, [engine]);
   const pending = state.queue.filter(item => item.status !== 'done' && item.status !== 'cancelled');
   const completed = state.queue.filter(item => item.status === 'done').length;
+  const startBackup = async (action: () => Promise<void>) => {
+    try {
+      if (state.background && Platform.OS === 'android' && Number(Platform.Version) >= 33
+        && !await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS)) {
+        const result = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS, {
+          title: 'Show backup progress',
+          message: 'Syncachu uses an ongoing notification to show background backup progress and let you stop it.',
+          buttonPositive: 'Continue',
+          buttonNegative: 'Not now',
+        });
+        if (result !== PermissionsAndroid.RESULTS.GRANTED) {
+          Alert.alert('Backup notifications are off', 'Backup can still run. Android will show Syncachu in Active apps, where you can stop it. Enable notifications in Settings to see progress.');
+        }
+      }
+      await action();
+    } catch (error) { engine.error(error); }
+  };
   const confirmAuto = (value: boolean) => {
     if (!value) { void engine.setAuto(false); return; }
     Alert.alert('Sync while this app is open?', 'Automatically queue all accessible photos and videos, including future additions, whenever Syncachu is open. Uploads follow your network preference. This is not continuous background backup.', [
-      { text: 'Not now', style: 'cancel' }, { text: 'Enable', onPress: () => { void engine.setAuto(true); } },
+      { text: 'Not now', style: 'cancel' }, { text: 'Enable', onPress: () => { void startBackup(() => engine.setAuto(true)); } },
     ]);
   };
   const header = <View style={styles.header}>
@@ -79,7 +96,7 @@ function Library({ engine, email, onSignOut }: { engine: SyncEngine; email: stri
     <View style={styles.hero}>
       <Text accessibilityRole="header" style={styles.heroTitle}>A little space for every memory.</Text>
       <Text style={styles.heroText}>Original photos and videos, safely in your own cloud. Your device library stays untouched.</Text>
-      <View style={styles.badge}><Text style={styles.badgeText}>{!state.active ? 'Paused · app is not active' : !state.online ? 'Offline · queue saved' : !state.allowMobile ? 'Uploads · Wi-Fi only' : 'Uploads · any connected network'}</Text></View>
+      <View style={styles.badge}><Text style={styles.badgeText}>{!state.active ? state.background ? 'Background backup · OS managed' : 'Paused · app is not active' : !state.online ? 'Offline · queue saved' : !state.allowMobile ? 'Uploads · Wi-Fi only' : 'Uploads · any connected network'}</Text></View>
     </View>
     <View style={styles.panel}>
       <Text accessibilityRole="header" style={styles.heading}>Instance storage</Text>
@@ -93,10 +110,10 @@ function Library({ engine, email, onSignOut }: { engine: SyncEngine; email: stri
     </View>
     {!state.ready ? <ActivityIndicator accessibilityLabel="Loading saved queue" color="#405D80" /> : <>
       <View style={styles.actions}>
-        <Action title="Choose files" onPress={() => { void engine.pick(); }} />
+        <Action title="Choose files" onPress={() => { void startBackup(() => engine.pick()); }} />
         <Action title={state.scanning ? 'Scanning library…' : 'Sync all'} secondary disabled={state.scanning}
           onPress={() => Alert.alert('Upload your accessible library?', 'This queues all photos and videos you grant access to. Cloud-only originals may need downloading in Photos first. Uploads use Wi-Fi unless you allow mobile data.', [
-            { text: 'Cancel', style: 'cancel' }, { text: 'Sync all', onPress: () => { void engine.scan(); } },
+            { text: 'Cancel', style: 'cancel' }, { text: 'Sync all', onPress: () => { void startBackup(() => engine.scan()); } },
           ])} />
       </View>
       <View style={styles.panel}>
@@ -105,7 +122,11 @@ function Library({ engine, email, onSignOut }: { engine: SyncEngine; email: stri
         <Toggle label="Auto-sync when app is open" detail="Opt in to scan your accessible library while active." value={state.auto} onChange={confirmAuto} />
       </View>
     </>}
-    <Text style={styles.note}>Keep Syncachu open to upload. Transfers pause when you leave and resume when you return on an allowed network. No continuous OS background sync.</Text>
+    <Text style={styles.note}>{state.background
+      ? `Keep Syncachu open until the library scan finishes. Queued backups can continue when you switch apps or lock the screen. ${Platform.OS === 'android'
+        ? 'Android shows an ongoing backup notification.'
+        : 'iOS schedules transfers and preparation time; large libraries may need you to reopen the app.'} Force-stopping the app stops backup. If sign-in expires, reopen and tap Retry. New photos are discovered only while the app is open. Device originals are never deleted.`
+      : 'This build has no native background worker. Keep Syncachu open to upload, or rebuild the native app to enable background backup.'}</Text>
     {!!state.message && <Text accessibilityRole="alert" style={styles.notice}>{state.message}</Text>}
     <View style={styles.row}><Text accessibilityRole="header" style={styles.heading}>Upload queue</Text><Text style={styles.muted}>{pending.length} pending · {completed} saved</Text></View>
     {pending.length === 0 && <Text style={styles.empty}>You’re all caught up. Choose a few memories to get started.</Text>}
@@ -117,12 +138,14 @@ function Library({ engine, email, onSignOut }: { engine: SyncEngine; email: stri
       </View>
       {!!item.error && <Text accessibilityRole="alert" style={styles.error}>{item.error}</Text>}
       <View style={styles.actions}>
-        {item.status === 'error' && <Action title="Retry" secondary onPress={() => { void engine.retry(item.key); }} />}
+        {item.status === 'error' && <Action title="Retry" secondary onPress={() => { void startBackup(() => engine.retry(item.key)); }} />}
         <Action title="Cancel" secondary onPress={() => { void engine.cancel(item.key); }} />
       </View>
     </View>)}
     {pending.length > visibleQueue && <Action title="Show more queued files" secondary onPress={() => setVisibleQueue(value => value + 20)} />}
-    {pending.some(item => item.status === 'error') && <Action title="Retry failed uploads" onPress={() => { void engine.retry(); }} />}
+    {(pending.some(item => item.status === 'error') || (state.background && pending.length > 0))
+      && <Action title={pending.some(item => item.status === 'error') ? 'Retry failed uploads' : 'Resume backup'}
+        onPress={() => { void startBackup(() => engine.retry()); }} />}
     <View style={styles.row}><Text accessibilityRole="header" style={styles.heading}>Saved memories</Text>
       <Action title={state.galleryBusy || state.usageBusy ? 'Loading…' : 'Refresh'} secondary disabled={state.galleryBusy || state.usageBusy}
         onPress={() => { void engine.loadGallery(); void engine.loadUsage(); }} /></View>
