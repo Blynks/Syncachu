@@ -16,19 +16,19 @@ export default ({ config }: ConfigContext): ExpoConfig => withQueueStorageCapaci
   version: '1.0.0',
   ios: {
     ...config.ios,
-    bundleIdentifier: process.env.EXPO_PUBLIC_APP_ID || 'com.example.syncachu',
+    bundleIdentifier: process.env.EXPO_PUBLIC_APP_ID || 'com.blynks.syncachu',
     infoPlist: {
       ...config.ios?.infoPlist,
       UIBackgroundModes: [...new Set([...(config.ios?.infoPlist?.UIBackgroundModes ?? []), 'processing'])],
       BGTaskSchedulerPermittedIdentifiers: [
         ...new Set([...(config.ios?.infoPlist?.BGTaskSchedulerPermittedIdentifiers ?? []),
-          `${process.env.EXPO_PUBLIC_APP_ID || 'com.example.syncachu'}.backup-processing`]),
+          `${process.env.EXPO_PUBLIC_APP_ID || 'com.blynks.syncachu'}.backup-processing`]),
       ],
     },
   },
   android: {
     ...config.android,
-    package: process.env.EXPO_PUBLIC_APP_ID || 'com.example.syncachu',
+    package: process.env.EXPO_PUBLIC_APP_ID || 'com.blynks.syncachu',
     blockedPermissions: ['android.permission.RECORD_AUDIO'],
   },
   plugins: [
