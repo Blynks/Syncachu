@@ -1,0 +1,10 @@
+{
+  "platforms": ["apple", "android"],
+  "apple": {
+    "modules": ["BackgroundBackupModule"],
+    "appDelegateSubscribers": ["BackgroundBackupAppDelegateSubscriber"]
+  },
+  "android": {
+    "modules": ["expo.modules.backgroundbackup.BackgroundBackupModule"]
+  }
+}

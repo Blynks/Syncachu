@@ -47,6 +47,7 @@ export type QueueItem = {
   status: 'queued' | 'working' | 'error' | 'done' | 'cancelled';
   error?: string; progress: number; sha256?: string; size?: number;
   uploadId?: string; blocks: number[]; hasThumbnail?: boolean;
+  backgroundId?: string;
 };
 export type Policy = {
   connected: boolean; reachable: boolean; wifi: boolean;

@@ -1,0 +1,20 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'expo.modules.backgroundbackup'
+version = '1.0.0'
+
+android {
+  namespace 'expo.modules.backgroundbackup'
+  defaultConfig {
+    versionCode 1
+    versionName '1.0.0'
+  }
+
+  dependencies {
+    // The same HTTP client version already used by React Native and Expo FileSystem.
+    implementation 'com.squareup.okhttp3:okhttp:4.9.2'
+  }
+}

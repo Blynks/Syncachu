@@ -274,6 +274,22 @@ Choose real application identifiers and register the EAS Android signing
 certificate SHA-1 with Google OAuth; use the matching iOS bundle ID/client scheme.
 Follow the root README's Google sign-in setup before building.
 
+Background backup also requires a new native binary: Expo autolinks the local
+`mobile/modules/background-backup` module. The app config registers iOS background
+processing and its bundle-specific task identifier; the Android module declares
+its data-sync foreground service and notification permissions. An OTA JavaScript
+update cannot add these native capabilities. Complete the root README's
+background/device acceptance checks on both platforms before distributing.
+Local JavaScript tests and bundle exports do not compile these Kotlin/Swift
+workers; successful Android/iOS native builds are also required for release.
+
+In particular, use the direct HTTPS API URL without login/canonical-host
+redirect middleware and the configured Azure account's direct blob endpoint.
+Apple's background URLSession automatically follows redirects; the client can
+reject an observed redirected result but cannot prevent its transmission.
+Nonredirecting endpoints, including auth/error responses, are a deployment
+requirement for iOS background backup.
+
 With EAS CLI 19.1+ available, run from `mobile`:
 
 ```powershell
